@@ -38,6 +38,7 @@ def login_tenbis() -> None:
     """Open a headed browser and log in to 10bis (run on your laptop)."""
     s = Settings()
     s.ensure_dirs()
+    s.headless = False  # always headed for interactive login
     setup_logger(debug=True)
     with tenbis_context(s) as (_, page):
         tenbis_flow.do_login(page, s.tenbis_email)
@@ -49,6 +50,7 @@ def login_whatsapp() -> None:
     """Open a headed browser and log in to WhatsApp Web via QR code (run on your laptop)."""
     s = Settings()
     s.ensure_dirs()
+    s.headless = False  # always headed for interactive login
     setup_logger(debug=True)
     with whatsapp_context(s) as (_, page):
         whatsapp.do_login(page)
