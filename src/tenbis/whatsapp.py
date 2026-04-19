@@ -1,0 +1,184 @@
+"""WhatsApp Web Playwright flow: send barcode image, scan reactions, send text.
+
+All selectors are imported from selectors.py — no CSS strings here.
+"""
+
+from pathlib import Path
+
+from playwright.sync_api import Page
+
+from tenbis import selectors
+from tenbis.logger import get_logger
+from tenbis.settings import Settings
+
+
+class GroupNotFoundError(Exception):
+    """The configured WhatsApp group name was not found."""
+
+
+class NotAGroupError(Exception):
+    """The search result matched but is not a group chat."""
+
+
+class WAAuthExpiredError(Exception):
+    """WhatsApp session expired. Run `mise run login:whatsapp` then sync profiles."""
+
+
+# ── auth ──────────────────────────────────────────────────────────────────────
+
+
+def check_auth(page: Page) -> None:
+    """Navigate to WhatsApp Web and raise WAAuthExpiredError if not logged in."""
+    page.goto(selectors.WHATSAPP_URL, wait_until="domcontentloaded")
+    try:
+        page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=20_000)
+    except Exception:
+        raise WAAuthExpiredError(
+            "WhatsApp session expired. Run 'mise run login:whatsapp' on your laptop "
+            "then 'mise run sync:profiles'."
+        )
+    get_logger().info("whatsapp_auth_ok")
+
+
+def do_login(page: Page) -> None:
+    """Interactive WhatsApp login: display QR and wait for the user to scan it."""
+    page.goto(selectors.WHATSAPP_URL, wait_until="domcontentloaded")
+    try:
+        page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=5_000)
+        get_logger().info("whatsapp_already_logged_in")
+        return
+    except Exception:
+        pass
+    print("Scan the QR code in the browser window to log in to WhatsApp Web.")
+    page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=120_000)
+    get_logger().info("whatsapp_login_complete")
+
+
+# ── group navigation ──────────────────────────────────────────────────────────
+
+
+def _open_group(page: Page, group_name: str) -> None:
+    """Search for group_name and open it, validating it is a group chat."""
+    # Click the search box
+    page.click(selectors.WHATSAPP_SEARCH_BOX, timeout=10_000)
+    page.wait_for_timeout(500)
+
+    # Clear any existing text and type the group name
+    search_input = page.locator(selectors.WHATSAPP_SEARCH_INPUT)
+    search_input.fill("")
+    search_input.type(group_name, delay=60)
+    page.wait_for_timeout(1_500)
+
+    # Find the matching result — exact title match
+    results = page.locator(selectors.WHATSAPP_CHAT_RESULT_TITLE)
+    count = results.count()
+    if count == 0:
+        raise GroupNotFoundError(
+            f"No WhatsApp chat found for '{group_name}'. "
+            "Check WHATSAPP_GROUP_NAME in .env matches the exact group title."
+        )
+
+    clicked = False
+    for i in range(count):
+        title = results.nth(i).get_attribute("title") or results.nth(i).inner_text()
+        if title.strip() == group_name:
+            results.nth(i).click()
+            clicked = True
+            break
+
+    if not clicked:
+        raise GroupNotFoundError(
+            f"Search returned results but none matched '{group_name}' exactly."
+        )
+
+    page.wait_for_timeout(2_000)
+
+    # Validate it's a group (subtitle lists participants)
+    try:
+        subtitle = page.locator(selectors.WHATSAPP_ACTIVE_CHAT_SUBTITLE).first.inner_text(
+            timeout=5_000
+        )
+        # Groups have a subtitle like "You, Wife" or "3 participants"; DMs just show a phone number / status  # noqa: E501
+        # The heuristic: if the subtitle contains a comma or "participant" it's a group
+        if "," not in subtitle and "participant" not in subtitle.lower():
+            get_logger(subtitle=subtitle).warning("group_subtitle_unexpected")
+    except Exception:
+        # Subtitle not found — not a blocking error, just log and continue
+        get_logger().warning("group_subtitle_not_found")
+
+    get_logger(group=group_name).info("group_opened")
+
+
+# ── send ──────────────────────────────────────────────────────────────────────
+
+
+def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings) -> str:
+    """Send an image to the configured WhatsApp group. Returns the message data-id."""
+    _open_group(page, settings.whatsapp_group_name)
+
+    # Open the attach menu
+    page.click(selectors.WHATSAPP_ATTACH_BUTTON, timeout=10_000)
+    page.wait_for_timeout(500)
+
+    # Upload the image via the hidden file input
+    with page.expect_file_chooser() as fc_info:
+        page.click(selectors.WHATSAPP_ATTACH_IMAGE_OPTION, timeout=8_000)
+    fc_info.value.set_files(str(image_path))
+    page.wait_for_timeout(2_000)
+
+    # Add caption
+    try:
+        caption_box = page.locator(selectors.WHATSAPP_CAPTION_INPUT).first
+        caption_box.click(timeout=5_000)
+        caption_box.type(caption, delay=30)
+    except Exception:
+        get_logger().warning("caption_input_not_found_skipping")
+
+    # Send
+    page.click(selectors.WHATSAPP_SEND_BUTTON, timeout=10_000)
+    page.wait_for_timeout(3_000)
+
+    # Capture the data-id of the most recent outgoing message
+    message_id = _last_sent_message_id(page)
+    get_logger(group=settings.whatsapp_group_name, message_id=message_id).info("barcode_sent")
+    return message_id
+
+
+def send_text(page: Page, text: str, settings: Settings) -> None:
+    """Send a plain text message to the configured WhatsApp group (for alerts)."""
+    _open_group(page, settings.whatsapp_group_name)
+    page.click(selectors.WHATSAPP_TEXT_INPUT, timeout=10_000)
+    page.keyboard.type(text, delay=20)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(2_000)
+    get_logger(group=settings.whatsapp_group_name).info("text_sent")
+
+
+# ── scan reactions ────────────────────────────────────────────────────────────
+
+
+def has_reaction(page: Page, message_id: str) -> bool:
+    """Return True if the message with the given data-id has any emoji reaction."""
+    selector = selectors.WHATSAPP_MESSAGE_BY_ID.format(message_id=message_id)
+    try:
+        msg_el = page.locator(selector).first
+        # Scroll the message into view
+        msg_el.scroll_into_view_if_needed(timeout=5_000)
+        page.wait_for_timeout(500)
+        reaction_el = msg_el.locator(selectors.WHATSAPP_REACTION_CONTAINER)
+        return reaction_el.count() > 0
+    except Exception:
+        return False
+
+
+def _last_sent_message_id(page: Page) -> str:
+    """Return the data-id of the most recently sent outgoing message, or empty string."""
+    try:
+        # Outgoing messages have data-id starting with "true_"
+        msgs = page.locator('[data-id^="true_"]')
+        count = msgs.count()
+        if count == 0:
+            return ""
+        return msgs.nth(count - 1).get_attribute("data-id") or ""
+    except Exception:
+        return ""

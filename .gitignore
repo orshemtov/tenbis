@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# uv
+uv.lock
+
+# mise local overrides
+.mise.local.toml
+
+# Runtime data — contains live browser sessions and voucher images, never commit
+data/
+
+# Environment — contains secrets
+.env
+
+# Editor
+.DS_Store
+.idea/
+.vscode/

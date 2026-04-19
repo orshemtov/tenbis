@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tenbis"
+version = "0.1.0"
+description = "Daily Shufersal voucher purchase via 10bis, delivered to WhatsApp"
+requires-python = ">=3.13"
+dependencies = [
+    "playwright>=1.49",
+    "pillow>=11.0",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "structlog>=24.4",
+    "typer>=0.15",
+]
+
+[project.scripts]
+tenbis = "tenbis.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tenbis"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

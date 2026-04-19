@@ -1,0 +1,17 @@
+[Unit]
+Description=10bis daily Shufersal voucher purchase
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={HOME}/tenbis
+EnvironmentFile={HOME}/tenbis/.env
+ExecStart={HOME}/tenbis/.venv/bin/tenbis run
+StandardOutput=journal
+StandardError=journal
+# Give Playwright plenty of time
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,125 @@
+[tools]
+python = "3.13"
+uv = "latest"
+
+# ── install ───────────────────────────────────────────────────────────────────
+
+[tasks.install]
+description = "Install Python deps and Playwright Chromium"
+run = [
+    "uv sync",
+    "uv run playwright install chromium",
+]
+
+[tasks."install:deps"]
+description = "Install Chromium system deps (run once on the server, needs sudo)"
+run = "uv run playwright install-deps chromium"
+
+# ── auth ──────────────────────────────────────────────────────────────────────
+
+[tasks."login:tenbis"]
+description = "Log in to 10bis with a headed browser (run locally)"
+run = "uv run tenbis login-tenbis"
+
+[tasks."login:whatsapp"]
+description = "Log in to WhatsApp Web with a headed browser / QR scan (run locally)"
+run = "uv run tenbis login-whatsapp"
+
+# ── daily ops ─────────────────────────────────────────────────────────────────
+
+[tasks.budget]
+description = "Print current 10bis budget (no purchase)"
+run = "uv run tenbis budget"
+
+[tasks."purchase:dry"]
+description = "Dry-run purchase: go through the whole flow but don't click Submit"
+run = "DRY_RUN=true uv run tenbis purchase"
+
+[tasks.purchase]
+description = "Purchase a Shufersal 200 ILS voucher"
+run = "uv run tenbis purchase"
+
+[tasks.send]
+description = "Send any unsent vouchers in pending/ to the WhatsApp group"
+run = "uv run tenbis send-pending"
+
+[tasks.scan]
+description = "Scan WhatsApp reactions; move reacted vouchers to used/"
+run = "uv run tenbis scan-reactions"
+
+[tasks.run]
+description = "Full daily pipeline: scan reactions → purchase → send (idempotent)"
+run = "uv run tenbis run"
+
+# ── deploy / server ───────────────────────────────────────────────────────────
+
+[tasks."sync:profiles"]
+description = "rsync 10bis + WhatsApp Chromium profiles from laptop to server"
+run = """
+set -euo pipefail
+if [ -z "${SERVER:-}" ]; then
+  echo "Set SERVER in .env or export SERVER=user@host"
+  exit 1
+fi
+rsync -av --progress data/10bis-profile/ "$SERVER":~/tenbis/data/10bis-profile/
+rsync -av --progress data/whatsapp-profile/ "$SERVER":~/tenbis/data/whatsapp-profile/
+echo "Profiles synced to $SERVER"
+"""
+
+[tasks.deploy]
+description = "Push local commits then pull + reinstall on the server"
+run = """
+set -euo pipefail
+if [ -z "${SERVER:-}" ]; then
+  echo "Set SERVER in .env or export SERVER=user@host"
+  exit 1
+fi
+git push
+ssh "$SERVER" 'cd ~/tenbis && git pull && mise run install'
+echo "Deployed to $SERVER"
+"""
+
+[tasks."server:install"]
+description = "Install systemd user units and enable the timer (run on server)"
+run = """
+set -euo pipefail
+dest="$HOME/.config/systemd/user"
+mkdir -p "$dest"
+# Substitute $HOME into the unit templates
+sed "s|{HOME}|$HOME|g" systemd/tenbis.service > "$dest/tenbis.service"
+sed "s|{HOME}|$HOME|g" systemd/tenbis.timer   > "$dest/tenbis.timer"
+systemctl --user daemon-reload
+systemctl --user enable --now tenbis.timer
+loginctl enable-linger "$USER" 2>/dev/null || true
+echo "Timer active:"
+systemctl --user list-timers tenbis.timer --no-pager
+"""
+
+[tasks."server:status"]
+description = "Show systemd timer and service status"
+run = """
+systemctl --user status tenbis.timer tenbis.service --no-pager || true
+systemctl --user list-timers tenbis.timer --no-pager
+"""
+
+[tasks."server:logs"]
+description = "Tail the last 200 log lines from the tenbis service"
+run = "journalctl --user -u tenbis.service -n 200 --no-pager"
+
+[tasks."server:run-now"]
+description = "Trigger an immediate run (same as the daily timer)"
+run = "systemctl --user start tenbis.service"
+
+# ── dev ───────────────────────────────────────────────────────────────────────
+
+[tasks.fmt]
+description = "Format code with ruff"
+run = "uv run ruff format src tests"
+
+[tasks.lint]
+description = "Lint with ruff"
+run = "uv run ruff check src tests"
+
+[tasks.test]
+description = "Run tests"
+run = "uv run pytest"

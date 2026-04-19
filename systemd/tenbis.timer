@@ -1,0 +1,14 @@
+[Unit]
+Description=10bis daily Shufersal voucher timer
+Requires=tenbis.service
+
+[Timer]
+# Fire at 09:00 Jerusalem time every day
+OnCalendar=*-*-* 09:00:00 Asia/Jerusalem
+# If the machine was off at 09:00, run as soon as it boots
+Persistent=true
+# Add a small random delay to avoid thundering-herd on shared networks
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
