@@ -7,7 +7,7 @@ Keep flow modules (tenbis_flow.py, whatsapp.py) completely selector-free.
 # ── 10bis ─────────────────────────────────────────────────────────────────────
 
 TENBIS_BASE_URL = "https://www.10bis.co.il/next/en/"
-TENBIS_BILLING_URL = "https://www.10bis.co.il/next/en/user-report"
+TENBIS_BILLING_URL = "https://www.10bis.co.il/next/en/personal-area?section=my-orders&dateBias=0"
 
 # Login
 TENBIS_LOGGED_IN_BUTTON = 'button[aria-label*="Hi,"], button:has-text("Hi,")'
@@ -20,8 +20,8 @@ TENBIS_OTP_INPUT = 'input[name^="verification-code-"]'
 TENBIS_OTP_SUBMIT = 'button[data-test-id="verification-submit"], button:has-text("Verify"), button:has-text("Accept")'  # noqa: E501
 
 # Budget page — labels that appear on the billing/transactions page
-TENBIS_BUDGET_LABELS_MONTHLY = ["Monthly balance", "Monthly limit", "Total balance"]
-TENBIS_BUDGET_LABELS_DAILY = ["Daily balance", "Daily limit", "Today's balance", "Total balance"]
+TENBIS_BUDGET_LABELS_MONTHLY = ["Monthly balance", "Monthly limit"]
+TENBIS_BUDGET_LABELS_DAILY = ["Daily balance", "Daily limit", "Today's balance"]
 
 # Restaurant / dish page
 TENBIS_ADD_TO_CART_BUTTON = 'button[data-test-id="add-to-cart"], button:has-text("Add to cart"), button:has-text("הוסף לסל")'  # noqa: E501
