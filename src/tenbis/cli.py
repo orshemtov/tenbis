@@ -62,12 +62,12 @@ def login_whatsapp() -> None:
 
 @app.command()
 def budget() -> None:
-    """Print the current 10bis monthly and daily balance."""
+    """Print the current 10bis monthly balance."""
     s = _settings()
     with tenbis_context(s) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly, daily = tenbis_flow.get_budget(page)
-    typer.echo(f"Monthly balance: ₪{monthly:.0f}  |  Daily balance: ₪{daily:.0f}")
+        monthly = tenbis_flow.get_budget(page)
+    typer.echo(f"Monthly balance: ₪{monthly:.0f}")
 
 
 # ── purchase command ──────────────────────────────────────────────────────────
@@ -84,17 +84,16 @@ def purchase() -> None:
 
     with tenbis_context(s) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly, daily = tenbis_flow.get_budget(page)
+        monthly = tenbis_flow.get_budget(page)
 
-        if monthly < s.tenbis_min_monthly_balance or daily < s.tenbis_min_daily_balance:
+        if monthly < s.tenbis_min_monthly_balance:
             log.warning(
                 "budget_too_low",
                 monthly=monthly,
-                daily=daily,
                 required=s.tenbis_item_price,
             )
             typer.echo(
-                f"Budget too low (monthly=₪{monthly:.0f} daily=₪{daily:.0f}). "
+                f"Budget too low (monthly=₪{monthly:.0f}). "
                 f"Required: ₪{s.tenbis_item_price:.0f}. Nothing purchased.",
                 err=True,
             )
@@ -282,12 +281,12 @@ def _run_purchase(s: Settings) -> Path | None:
     """Return the PNG path on success, None if budget is too low."""
     with tenbis_context(s) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly, daily = tenbis_flow.get_budget(page)
+        monthly = tenbis_flow.get_budget(page)
 
-        if monthly < s.tenbis_min_monthly_balance or daily < s.tenbis_min_daily_balance:
-            get_logger(monthly=monthly, daily=daily).warning("budget_too_low")
+        if monthly < s.tenbis_min_monthly_balance:
+            get_logger(monthly=monthly).warning("budget_too_low")
             typer.echo(
-                f"Budget too low (monthly=₪{monthly:.0f} daily=₪{daily:.0f}). Skipping.",
+                f"Budget too low (monthly=₪{monthly:.0f}). Skipping.",
                 err=True,
             )
             return None

@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     )
     tenbis_item_price: float = 200.0
     tenbis_min_monthly_balance: float = 200.0
-    tenbis_min_daily_balance: float = 200.0
 
     # WhatsApp
     whatsapp_group_name: str = "Vouchers"

@@ -19,9 +19,8 @@ TENBIS_LOGIN_SUBMIT = (
 TENBIS_OTP_INPUT = 'input[name^="verification-code-"]'
 TENBIS_OTP_SUBMIT = 'button[data-test-id="verification-submit"], button:has-text("Verify"), button:has-text("Accept")'  # noqa: E501
 
-# Budget page — labels that appear on the billing/transactions page
+# Budget page — labels that appear on the billing report
 TENBIS_BUDGET_LABELS_MONTHLY = ["Monthly balance", "Monthly limit"]
-TENBIS_BUDGET_LABELS_DAILY = ["Daily balance", "Daily limit", "Today's balance"]
 
 # Restaurant / dish page
 TENBIS_ADD_TO_CART_BUTTON = 'button[data-test-id="add-to-cart"], button:has-text("Add to cart"), button:has-text("הוסף לסל")'  # noqa: E501

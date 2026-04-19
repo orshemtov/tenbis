@@ -22,13 +22,10 @@ class AuthExpiredError(Exception):
 class BudgetInsufficientError(Exception):
     """Raised when there is not enough budget to purchase."""
 
-    def __init__(self, monthly: float, daily: float, required: float) -> None:
+    def __init__(self, monthly: float, required: float) -> None:
         self.monthly = monthly
-        self.daily = daily
         self.required = required
-        super().__init__(
-            f"Insufficient budget: monthly={monthly} daily={daily} required={required}"
-        )
+        super().__init__(f"Insufficient budget: monthly={monthly} required={required}")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -76,23 +73,19 @@ def check_auth(page: Page) -> None:
     get_logger().info("tenbis_auth_ok")
 
 
-def get_budget(page: Page) -> tuple[float, float]:
-    """Return (monthly_balance, daily_balance) by visiting the billing page."""
+def get_budget(page: Page) -> float:
+    """Return monthly_balance by visiting the billing page."""
     page.goto(selectors.TENBIS_BILLING_URL, wait_until="domcontentloaded")
-    # Give the page a moment to hydrate
     page.wait_for_timeout(2_000)
     body = page.locator("body").inner_text()
 
     monthly = _get_budget_from_text(body, selectors.TENBIS_BUDGET_LABELS_MONTHLY)
-    daily = _get_budget_from_text(body, selectors.TENBIS_BUDGET_LABELS_DAILY)
 
     if monthly is None:
         raise RuntimeError("Could not read monthly balance from billing page")
-    if daily is None:
-        daily = monthly  # some accounts only show one figure
 
-    get_logger(monthly=monthly, daily=daily).info("budget")
-    return monthly, daily
+    get_logger(monthly=monthly).info("budget")
+    return monthly
 
 
 def do_login(page: Page, email: str) -> None:
