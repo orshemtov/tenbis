@@ -111,6 +111,14 @@ def open_group(page: Page, group_name: str) -> None:
 
     page.wait_for_timeout(2_000)
 
+    # Click the message input to confirm the chat is fully loaded and dismiss the
+    # search overlay.  Pressing Escape would close the chat entirely; clicking the
+    # input is the safe way to "commit" the group open without side-effects.
+    try:
+        page.locator(selectors.WHATSAPP_TEXT_INPUT).first.click(timeout=5_000)
+    except Exception:
+        pass  # non-fatal; chat may already be in focus
+
     try:
         subtitle = page.locator(selectors.WHATSAPP_ACTIVE_CHAT_SUBTITLE).first.inner_text(
             timeout=5_000
@@ -168,10 +176,26 @@ def send_text(page: Page, text: str, settings: Settings) -> None:
 def scan_voucher_messages(page: Page, s: Settings) -> list[VoucherMessage]:
     """Scan the currently open WA group for bot-sent barcode messages.
 
-    Uses JS to query the live DOM — finds all [data-id] elements whose visible
-    text contains CAPTION_PREFIX, then reads their reaction buttons.
+    Scrolls up several times to load older messages (WA uses virtual scrolling),
+    then uses JS to find all [data-id] elements whose caption text contains
+    CAPTION_PREFIX.  Caption text is in [data-testid="selectable-text"] or
+    [data-testid="media-caption-rich-text"] inside the message bubble — NOT in
+    span[dir] (which only holds timestamps).
     """
-    page.wait_for_timeout(1_000)  # let messages render
+    page.wait_for_timeout(1_000)  # let initial messages render
+
+    # Scroll up to load recent history (virtual list only keeps ~10 msgs in DOM)
+    panel = page.locator('[data-testid="conversation-panel-messages"]')
+    try:
+        panel.first.wait_for(timeout=5_000)
+        for _ in range(5):
+            panel.first.evaluate("el => el.scrollTop -= el.clientHeight")
+            page.wait_for_timeout(600)
+        # Scroll back to bottom so the chat looks normal after scanning
+        panel.first.evaluate("el => el.scrollTop = el.scrollHeight")
+        page.wait_for_timeout(500)
+    except Exception:
+        get_logger().warning("scroll_panel_not_found")
 
     raw: list[dict] = page.evaluate(
         """([prefix, botReaction]) => {
@@ -180,13 +204,22 @@ def scan_voucher_messages(page: Page, s: Settings) -> list[VoucherMessage]:
                 const dataId = el.getAttribute('data-id');
                 if (!dataId || dataId.startsWith('album-')) return;
 
-                // Find a span containing our caption prefix
+                // Caption text is in data-testid="image-caption selectable-text".
+                // Use the ~= (word-match) selector to handle multi-value data-testid.
                 let caption = '';
-                for (const span of el.querySelectorAll('span[dir]')) {
-                    if ((span.textContent || '').includes(prefix)) {
-                        caption = span.textContent.trim();
-                        break;
+                const candidateSelectors = [
+                    '[data-testid~="selectable-text"]',
+                    '[data-testid~="media-caption-rich-text"]',
+                ];
+                for (const sel of candidateSelectors) {
+                    for (const node of el.querySelectorAll(sel)) {
+                        const txt = (node.textContent || '').trim();
+                        if (txt.includes(prefix)) {
+                            caption = txt;
+                            break;
+                        }
                     }
+                    if (caption) break;
                 }
                 if (!caption) return;
 

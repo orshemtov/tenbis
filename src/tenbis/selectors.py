@@ -63,9 +63,11 @@ WHATSAPP_ATTACH_BUTTON = '[aria-label="Attach"]'
 # native file chooser that routes the upload through the photo pipeline (not stickers).
 WHATSAPP_PHOTOS_BUTTON = '[aria-label="Photos & videos"]'
 
-# Caption box and send button in the media preview modal
-# data-tab=9 is the caption field; aria-label fallback for any locale
-WHATSAPP_CAPTION_INPUT = 'div[contenteditable][data-tab="9"], [aria-label*="Add a caption"]'
+# Caption box in the media preview modal.
+# The container itself IS the div[contenteditable] (data-tab is now "undefined").
+WHATSAPP_CAPTION_INPUT = (
+    '[data-testid="media-caption-input-container"], [aria-label*="Add a caption"]'
+)
 WHATSAPP_SEND_BUTTON = '[data-testid="send"], [data-testid="media-send"], [aria-label="Send"]'
 
 # Message in conversation — used to locate sent messages for reaction scanning
