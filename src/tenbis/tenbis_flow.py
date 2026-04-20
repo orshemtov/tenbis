@@ -22,13 +22,29 @@ class AuthExpiredError(Exception):
 class BudgetInsufficientError(Exception):
     """Raised when there is not enough budget to purchase."""
 
-    def __init__(self, monthly: float, required: float) -> None:
+    def __init__(self, monthly: float, daily_remaining: float, required: float) -> None:
         self.monthly = monthly
+        self.daily_remaining = daily_remaining
         self.required = required
-        super().__init__(f"Insufficient budget: monthly={monthly} required={required}")
+        super().__init__(
+            f"Insufficient budget: monthly={monthly} daily_remaining={daily_remaining} required={required}"  # noqa: E501
+        )
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def check_auth(page: Page) -> None:
+    """Navigate to the 10bis home page and raise AuthExpiredError if not logged in."""
+    page.goto(selectors.TENBIS_BASE_URL, wait_until="domcontentloaded")
+    try:
+        page.wait_for_selector(selectors.TENBIS_LOGGED_IN_BUTTON, timeout=8_000)
+    except Exception:
+        raise AuthExpiredError(
+            "10bis session expired. Run 'mise run login:tenbis' on your laptop "
+            "then 'mise run sync:profiles'."
+        )
+    get_logger().info("tenbis_auth_ok")
 
 
 def _parse_amount(text: str) -> float | None:
@@ -45,47 +61,53 @@ def _get_budget_from_text(body_text: str, labels: list[str]) -> float | None:
         label_cf = label.casefold()
         for idx, line in enumerate(normalized):
             if label_cf in line:
-                # look backwards for a ₪ value
                 for prev in range(idx - 1, max(idx - 5, -1), -1):
                     val = _parse_amount(lines[prev])
                     if val is not None:
                         return val
-                # also look in the same line
                 val = _parse_amount(lines[idx])
                 if val is not None:
                     return val
     return None
 
 
-# ── public API ────────────────────────────────────────────────────────────────
+def _today_spent(body_text: str) -> float:
+    """Sum transaction amounts whose date matches today (DD.MM.YY format)."""
+    today = dt.date.today().strftime("%d.%m.%y")
+    lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+    total = 0.0
+    for idx, line in enumerate(lines):
+        if line.startswith(today):
+            # row layout: date+time, business, order type, ₪amount
+            for offset in range(1, 5):
+                if idx + offset < len(lines):
+                    val = _parse_amount(lines[idx + offset])
+                    if val is not None:
+                        total += val
+                        break
+    return total
 
 
-def check_auth(page: Page) -> None:
-    """Navigate to the 10bis home page and raise AuthExpiredError if not logged in."""
-    page.goto(selectors.TENBIS_BASE_URL, wait_until="domcontentloaded")
-    try:
-        page.wait_for_selector(selectors.TENBIS_LOGGED_IN_BUTTON, timeout=8_000)
-    except Exception:
-        raise AuthExpiredError(
-            "10bis session expired. Run 'mise run login:tenbis' on your laptop "
-            "then 'mise run sync:profiles'."
-        )
-    get_logger().info("tenbis_auth_ok")
+def get_budget(page: Page, daily_limit: float) -> tuple[float, float]:
+    """Return (monthly_balance, daily_remaining).
 
-
-def get_budget(page: Page) -> float:
-    """Return monthly_balance by visiting the billing page."""
+    daily_remaining = daily_limit - sum of today's transactions.
+    """
     page.goto(selectors.TENBIS_BILLING_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(2_000)
     body = page.locator("body").inner_text()
 
     monthly = _get_budget_from_text(body, selectors.TENBIS_BUDGET_LABELS_MONTHLY)
-
     if monthly is None:
         raise RuntimeError("Could not read monthly balance from billing page")
 
-    get_logger(monthly=monthly).info("budget")
-    return monthly
+    spent_today = _today_spent(body)
+    daily_remaining = max(daily_limit - spent_today, 0.0)
+
+    get_logger(monthly=monthly, spent_today=spent_today, daily_remaining=daily_remaining).info(
+        "budget"
+    )
+    return monthly, daily_remaining
 
 
 def do_login(page: Page, email: str) -> None:
@@ -144,10 +166,10 @@ def purchase_voucher(page: Page, settings: Settings) -> tuple[bytes, VoucherReco
     If settings.dry_run is True, stops before the final Submit click and raises
     RuntimeError so the caller knows nothing was charged.
     """
-    log = get_logger(item_url=settings.tenbis_item_url, dry_run=settings.dry_run)
+    log = get_logger(item_url=settings.item.url, dry_run=settings.dry_run)
 
     # Navigate to the dish page
-    page.goto(settings.tenbis_item_url, wait_until="domcontentloaded")
+    page.goto(settings.item.url, wait_until="domcontentloaded")
     page.wait_for_timeout(2_000)
 
     # Add to cart
@@ -198,7 +220,7 @@ def purchase_voucher(page: Page, settings: Settings) -> tuple[bytes, VoucherReco
     now_iso = dt.datetime.now(settings.tz).isoformat(timespec="seconds")
     record = VoucherRecord(
         barcode_number=barcode_number,
-        amount=settings.tenbis_item_price,
+        amount=settings.item.amount,
         purchased_at=now_iso,
         whatsapp_group=settings.whatsapp_group_name,
     )

@@ -1,7 +1,21 @@
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Item(BaseModel):
+    url: str = (
+        "https://www.10bis.co.il/next/en/restaurants/menu/delivery/26698/shufersal/?dishId=6552647"
+    )
+    amount: float = 200.0
+
+
+SHUFERSAL_200 = Item(
+    url="https://www.10bis.co.il/next/en/restaurants/menu/delivery/26698/shufersal/?dishId=6552647",
+    amount=200.0,
+)
 
 
 class Settings(BaseSettings):
@@ -13,11 +27,9 @@ class Settings(BaseSettings):
 
     # 10bis
     tenbis_email: str = ""
-    tenbis_item_url: str = (
-        "https://www.10bis.co.il/next/en/restaurants/menu/delivery/26698/shufersal/?dishId=6552647"
-    )
-    tenbis_item_price: float = 200.0
+    item: Item = SHUFERSAL_200
     tenbis_min_monthly_balance: float = 200.0
+    tenbis_daily_limit: float = 250.0
 
     # WhatsApp
     whatsapp_group_name: str = "Vouchers"
@@ -29,6 +41,7 @@ class Settings(BaseSettings):
     headless: bool = True
     dry_run: bool = False
     debug: bool = False
+    log_format: str = "plain"  # "plain" | "json"
     timezone: str = "Asia/Jerusalem"
 
     # Deploy

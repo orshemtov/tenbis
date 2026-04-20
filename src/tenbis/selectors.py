@@ -23,11 +23,9 @@ TENBIS_OTP_SUBMIT = 'button[data-test-id="verification-submit"], button:has-text
 TENBIS_BUDGET_LABELS_MONTHLY = ["Monthly balance", "Monthly limit"]
 
 # Restaurant / dish page
-TENBIS_ADD_TO_CART_BUTTON = 'button[data-test-id="add-to-cart"], button:has-text("Add to cart"), button:has-text("הוסף לסל")'  # noqa: E501
+TENBIS_ADD_TO_CART_BUTTON = 'button[data-test-id="submitDishBtn"], button[data-test-id="add-to-cart"], button:has-text("Add item"), button:has-text("Add to cart"), button:has-text("הוסף לסל")'  # noqa: E501
 TENBIS_CART_BUTTON = '[data-test-id="cart-button"], [aria-label*="cart" i], a[href*="checkout"]'
-TENBIS_CHECKOUT_BUTTON = (
-    'button:has-text("Checkout"), button:has-text("לתשלום"), a:has-text("Checkout")'
-)
+TENBIS_CHECKOUT_BUTTON = 'button:has-text("Proceed to payment"), button:has-text("Checkout"), button:has-text("לתשלום"), a:has-text("Checkout")'
 
 # Checkout page
 TENBIS_SUBMIT_ORDER_BUTTON = 'button[data-test-id="submit-order"], button:has-text("Place order"), button:has-text("אישור הזמנה")'  # noqa: E501
@@ -46,11 +44,11 @@ WHATSAPP_URL = "https://web.whatsapp.com"
 WHATSAPP_LOGGED_IN = "#pane-side"
 
 # Search
-WHATSAPP_SEARCH_BOX = '[data-testid="chat-list-search"], [title="Search input textbox"]'
-WHATSAPP_SEARCH_INPUT = '[data-testid="chat-list-search"] input, [title="Search input textbox"]'
+WHATSAPP_SEARCH_BOX = '[aria-label="Search or start a new chat"]'
+WHATSAPP_SEARCH_INPUT = '[aria-label="Search or start a new chat"]'
 
 # Chat list result item — the span that holds the chat title text
-WHATSAPP_CHAT_RESULT_TITLE = '[data-testid="cell-frame-title"] span[title], span[dir="auto"][title]'
+WHATSAPP_CHAT_RESULT_TITLE = 'span[dir="auto"][title]'
 
 # Active chat header — used to validate we opened the right group
 WHATSAPP_ACTIVE_CHAT_TITLE = 'header [data-testid="conversation-info-header-chat-title"] span'
@@ -60,15 +58,15 @@ WHATSAPP_ACTIVE_CHAT_SUBTITLE = (
 )
 
 # Attach menu
-WHATSAPP_ATTACH_BUTTON = '[data-testid="attach-menu-plus"], [title="Attach"]'
-WHATSAPP_ATTACH_IMAGE_OPTION = (
-    '[data-testid="mi-attach-image-video"], input[accept*="image"][type="file"]'
-)
-WHATSAPP_FILE_INPUT = 'input[type="file"][accept*="image"]'
+WHATSAPP_ATTACH_BUTTON = '[aria-label="Attach"]'
+# The "Photos & videos" button inside the attach dropdown — clicking this opens a
+# native file chooser that routes the upload through the photo pipeline (not stickers).
+WHATSAPP_PHOTOS_BUTTON = '[aria-label="Photos & videos"]'
 
 # Caption box and send button in the media preview modal
-WHATSAPP_CAPTION_INPUT = '[data-testid="media-caption-input-container"] [contenteditable="true"], div[contenteditable][data-tab]'  # noqa: E501
-WHATSAPP_SEND_BUTTON = '[data-testid="send"], [data-testid="media-send"]'
+# data-tab=9 is the caption field; aria-label fallback for any locale
+WHATSAPP_CAPTION_INPUT = 'div[contenteditable][data-tab="9"], [aria-label*="Add a caption"]'
+WHATSAPP_SEND_BUTTON = '[data-testid="send"], [data-testid="media-send"], [aria-label="Send"]'
 
 # Message in conversation — used to locate sent messages for reaction scanning
 # The data-id attribute uniquely identifies each message
@@ -77,6 +75,4 @@ WHATSAPP_MESSAGE_BY_ID = '[data-id="{message_id}"]'
 WHATSAPP_REACTION_CONTAINER = '[data-testid="msg-reactions"], [class*="reaction"]'
 
 # Outgoing text message input
-WHATSAPP_TEXT_INPUT = (
-    '[data-testid="conversation-compose-box-input"], [contenteditable="true"][data-tab]'
-)
+WHATSAPP_TEXT_INPUT = '[aria-label="Type a message"], [aria-label*="Type a message"]'

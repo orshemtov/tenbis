@@ -26,7 +26,7 @@ app = typer.Typer(help="10bis → Shufersal voucher automation", add_completion=
 def _settings() -> Settings:
     s = Settings()
     s.ensure_dirs()
-    setup_logger(s.debug)
+    setup_logger(s.debug, s.log_format)
     return s
 
 
@@ -39,7 +39,7 @@ def login_tenbis() -> None:
     s = Settings()
     s.ensure_dirs()
     s.headless = False  # always headed for interactive login
-    setup_logger(debug=True)
+    setup_logger(debug=True, log_format=s.log_format)
     with tenbis_context(s) as (_, page):
         tenbis_flow.do_login(page, s.tenbis_email)
     typer.echo("10bis session saved. Run 'mise run sync:profiles' to copy to the server.")
@@ -51,7 +51,7 @@ def login_whatsapp() -> None:
     s = Settings()
     s.ensure_dirs()
     s.headless = False  # always headed for interactive login
-    setup_logger(debug=True)
+    setup_logger(debug=True, log_format=s.log_format)
     with whatsapp_context(s) as (_, page):
         whatsapp.do_login(page)
     typer.echo("WhatsApp session saved. Run 'mise run sync:profiles' to copy to the server.")
@@ -62,12 +62,12 @@ def login_whatsapp() -> None:
 
 @app.command()
 def budget() -> None:
-    """Print the current 10bis monthly balance."""
+    """Print the current 10bis monthly balance and daily remaining."""
     s = _settings()
     with tenbis_context(s) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly = tenbis_flow.get_budget(page)
-    typer.echo(f"Monthly balance: ₪{monthly:.0f}")
+        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit)
+    typer.echo(f"Monthly balance: ₪{monthly:.0f}  |  Daily remaining: ₪{daily_remaining:.0f}")
 
 
 # ── purchase command ──────────────────────────────────────────────────────────
@@ -82,19 +82,24 @@ def purchase() -> None:
     s = _settings()
     log = get_logger(dry_run=s.dry_run)
 
+    if not s.dry_run and today_voucher_exists(s):
+        typer.echo("Already purchased a voucher today. Nothing to do.")
+        raise typer.Exit(0)
+
     with tenbis_context(s) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly = tenbis_flow.get_budget(page)
+        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit)
 
-        if monthly < s.tenbis_min_monthly_balance:
+        if monthly < s.tenbis_min_monthly_balance or daily_remaining < s.item.amount:
             log.warning(
                 "budget_too_low",
                 monthly=monthly,
-                required=s.tenbis_item_price,
+                daily_remaining=daily_remaining,
+                required=s.item.amount,
             )
             typer.echo(
-                f"Budget too low (monthly=₪{monthly:.0f}). "
-                f"Required: ₪{s.tenbis_item_price:.0f}. Nothing purchased.",
+                f"Budget too low (monthly=₪{monthly:.0f} daily_remaining=₪{daily_remaining:.0f}). "
+                f"Required: ₪{s.item.amount:.0f}. Nothing purchased.",
                 err=True,
             )
             raise typer.Exit(0)
@@ -110,6 +115,16 @@ def purchase() -> None:
     png_path = save_pending(record, png_bytes, s)
     log.info("voucher_saved", path=str(png_path))
     typer.echo(f"Voucher saved: {png_path}")
+
+
+@app.command("send-text")
+def send_text(message: str) -> None:
+    """Send a plain text message to the configured WhatsApp group."""
+    s = _settings()
+    with whatsapp_context(s) as (_, page):
+        whatsapp.check_auth(page)
+        whatsapp.send_text(page, message, s)
+    typer.echo(f"Sent: {message}")
 
 
 # ── send command ──────────────────────────────────────────────────────────────
@@ -169,7 +184,6 @@ def scan_reactions() -> None:
     moved = 0
     with whatsapp_context(s) as (_, page):
         whatsapp.check_auth(page)
-        # Open the group first so messages are visible
         page.click(whatsapp.selectors.WHATSAPP_SEARCH_BOX, timeout=10_000)
         page.wait_for_timeout(500)
         page.locator(whatsapp.selectors.WHATSAPP_SEARCH_INPUT).fill(s.whatsapp_group_name)
@@ -180,7 +194,6 @@ def scan_reactions() -> None:
                 titles.nth(i).click()
                 break
         page.wait_for_timeout(2_000)
-
         for png_path, record in records:
             if whatsapp.has_reaction(page, record.whatsapp_message_id):
                 new_path = move_to_used(png_path, s)
@@ -261,15 +274,7 @@ def _run_scan_reactions(s: Settings) -> None:
         return
     with whatsapp_context(s) as (_, page):
         whatsapp.check_auth(page)
-        page.click(whatsapp.selectors.WHATSAPP_SEARCH_BOX, timeout=10_000)
-        page.wait_for_timeout(500)
-        page.locator(whatsapp.selectors.WHATSAPP_SEARCH_INPUT).fill(s.whatsapp_group_name)
-        page.wait_for_timeout(1_500)
-        titles = page.locator(whatsapp.selectors.WHATSAPP_CHAT_RESULT_TITLE)
-        for i in range(titles.count()):
-            if (titles.nth(i).get_attribute("title") or "").strip() == s.whatsapp_group_name:
-                titles.nth(i).click()
-                break
+        whatsapp.open_group(page, s.whatsapp_group_name)
         page.wait_for_timeout(2_000)
         for png_path, record in records:
             if whatsapp.has_reaction(page, record.whatsapp_message_id):
@@ -281,12 +286,12 @@ def _run_purchase(s: Settings) -> Path | None:
     """Return the PNG path on success, None if budget is too low."""
     with tenbis_context(s) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly = tenbis_flow.get_budget(page)
+        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit)
 
-        if monthly < s.tenbis_min_monthly_balance:
-            get_logger(monthly=monthly).warning("budget_too_low")
+        if monthly < s.tenbis_min_monthly_balance or daily_remaining < s.item.amount:
+            get_logger(monthly=monthly, daily_remaining=daily_remaining).warning("budget_too_low")
             typer.echo(
-                f"Budget too low (monthly=₪{monthly:.0f}). Skipping.",
+                f"Budget too low (monthly=₪{monthly:.0f} daily_remaining=₪{daily_remaining:.0f}). Skipping.",  # noqa: E501
                 err=True,
             )
             return None

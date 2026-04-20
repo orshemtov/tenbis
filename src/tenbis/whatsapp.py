@@ -31,7 +31,7 @@ def check_auth(page: Page) -> None:
     """Navigate to WhatsApp Web and raise WAAuthExpiredError if not logged in."""
     page.goto(selectors.WHATSAPP_URL, wait_until="domcontentloaded")
     try:
-        page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=20_000)
+        page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=60_000)
     except Exception:
         raise WAAuthExpiredError(
             "WhatsApp session expired. Run 'mise run login:whatsapp' on your laptop "
@@ -44,7 +44,7 @@ def do_login(page: Page) -> None:
     """Interactive WhatsApp login: display QR and wait for the user to scan it."""
     page.goto(selectors.WHATSAPP_URL, wait_until="domcontentloaded")
     try:
-        page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=5_000)
+        page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=10_000)
         get_logger().info("whatsapp_already_logged_in")
         return
     except Exception:
@@ -57,16 +57,16 @@ def do_login(page: Page) -> None:
 # ── group navigation ──────────────────────────────────────────────────────────
 
 
-def _open_group(page: Page, group_name: str) -> None:
+def open_group(page: Page, group_name: str) -> None:
     """Search for group_name and open it, validating it is a group chat."""
-    # Click the search box
+    # Click the search box and clear it
     page.click(selectors.WHATSAPP_SEARCH_BOX, timeout=10_000)
     page.wait_for_timeout(500)
+    page.keyboard.press("Control+a")
+    page.keyboard.press("Backspace")
 
-    # Clear any existing text and type the group name
-    search_input = page.locator(selectors.WHATSAPP_SEARCH_INPUT)
-    search_input.fill("")
-    search_input.type(group_name, delay=60)
+    # Type the group name
+    page.keyboard.type(group_name, delay=60)
     page.wait_for_timeout(1_500)
 
     # Find the matching result — exact title match
@@ -114,15 +114,14 @@ def _open_group(page: Page, group_name: str) -> None:
 
 def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings) -> str:
     """Send an image to the configured WhatsApp group. Returns the message data-id."""
-    _open_group(page, settings.whatsapp_group_name)
+    open_group(page, settings.whatsapp_group_name)
 
-    # Open the attach menu
+    # Open the attach menu, click "Photos & videos", and set the file via the
+    # native file chooser — this routes through the photo pipeline, not stickers.
     page.click(selectors.WHATSAPP_ATTACH_BUTTON, timeout=10_000)
     page.wait_for_timeout(500)
-
-    # Upload the image via the hidden file input
-    with page.expect_file_chooser() as fc_info:
-        page.click(selectors.WHATSAPP_ATTACH_IMAGE_OPTION, timeout=8_000)
+    with page.expect_file_chooser(timeout=10_000) as fc_info:
+        page.locator(selectors.WHATSAPP_PHOTOS_BUTTON).click()
     fc_info.value.set_files(str(image_path))
     page.wait_for_timeout(2_000)
 
@@ -134,8 +133,8 @@ def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings)
     except Exception:
         get_logger().warning("caption_input_not_found_skipping")
 
-    # Send
-    page.click(selectors.WHATSAPP_SEND_BUTTON, timeout=10_000)
+    # Send — force=True bypasses any overlay (e.g. the attach dropdown) that may still be visible
+    page.locator(selectors.WHATSAPP_SEND_BUTTON).click(timeout=10_000, force=True)
     page.wait_for_timeout(3_000)
 
     # Capture the data-id of the most recent outgoing message
@@ -146,7 +145,7 @@ def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings)
 
 def send_text(page: Page, text: str, settings: Settings) -> None:
     """Send a plain text message to the configured WhatsApp group (for alerts)."""
-    _open_group(page, settings.whatsapp_group_name)
+    open_group(page, settings.whatsapp_group_name)
     page.click(selectors.WHATSAPP_TEXT_INPUT, timeout=10_000)
     page.keyboard.type(text, delay=20)
     page.keyboard.press("Enter")
@@ -174,11 +173,14 @@ def has_reaction(page: Page, message_id: str) -> bool:
 def _last_sent_message_id(page: Page) -> str:
     """Return the data-id of the most recently sent outgoing message, or empty string."""
     try:
-        # Outgoing messages have data-id starting with "true_"
-        msgs = page.locator('[data-id^="true_"]')
+        # Message data-id format changed in newer WA Web — no longer uses true_ prefix.
+        # Exclude album containers (their IDs start with "album-").
+        msgs = page.locator("[data-id]")
         count = msgs.count()
-        if count == 0:
-            return ""
-        return msgs.nth(count - 1).get_attribute("data-id") or ""
+        for i in range(count - 1, -1, -1):
+            did = msgs.nth(i).get_attribute("data-id") or ""
+            if did and not did.startswith("album-"):
+                return did
+        return ""
     except Exception:
         return ""
