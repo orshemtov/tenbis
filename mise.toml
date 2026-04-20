@@ -43,9 +43,6 @@ run = "DRY_RUN=true uv run tenbis purchase"
 description = "Purchase a Shufersal 200 ILS voucher"
 run = "uv run tenbis purchase"
 
-[tasks.send]
-description = "Purchase a Shufersal voucher and send it to WhatsApp immediately"
-run = "uv run tenbis purchase"
 
 [tasks.scan]
 description = "Scan WhatsApp for used vouchers (any reaction) and acknowledge with 🤖"

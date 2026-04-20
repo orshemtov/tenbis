@@ -155,68 +155,72 @@ def run() -> None:
     """Full daily pipeline: scan reactions → purchase → send to WhatsApp.
 
     Idempotent: if a voucher was already sent today it exits early.
+
+    Each browser (WhatsApp, 10bis) is opened in its own sequential sync_playwright
+    context — Playwright forbids nesting two sync contexts inside each other.
     """
     s = _settings()
     log = get_logger()
 
+    # ── Step 1 & 2: WhatsApp — ack used vouchers + idempotency check ──────────
+    error_text: str | None = None
     with whatsapp_context(s) as (_, wa_page):
         try:
             whatsapp.check_auth(wa_page)
             whatsapp.open_group(wa_page, s.whatsapp_group_name)
         except whatsapp.WAAuthExpiredError as exc:
             log.error("whatsapp_auth_expired")
-            typer.echo(f"⚠️ WhatsApp session expired: {exc}", err=True)
+            typer.echo(f"WhatsApp session expired: {exc}", err=True)
             sys.exit(1)
 
-        # Step 1: acknowledge any newly-used vouchers
         try:
             _ack_used_vouchers(wa_page, s)
-        except Exception as exc:
-            log.exception("ack_failed")
-            # Non-fatal — continue
+        except Exception:
+            log.exception("ack_failed")  # non-fatal
 
-        # Step 2: idempotency check
         if whatsapp.sent_today(wa_page, s):
             log.info("already_sent_today")
             typer.echo("Already sent a voucher today. Nothing to do.")
             raise typer.Exit(0)
 
-        # Step 3: purchase (separate 10bis browser context)
-        try:
-            png_bytes, record = _do_purchase(s)
-        except tenbis_flow.AuthExpiredError as exc:
-            log.error("tenbis_auth_expired")
-            whatsapp.send_text(
-                wa_page,
-                f"⚠️ 10bis session expired — run `mise run login:tenbis` on your laptop "
-                f"then `mise run sync:profiles`\n\nDetails: {exc}",
-                s,
-            )
-            sys.exit(1)
-        except Exception as exc:
-            log.exception("purchase_failed")
-            whatsapp.send_text(wa_page, f"⚠️ Purchase failed: {exc}", s)
-            sys.exit(1)
+    # ── Step 3: 10bis — purchase (separate playwright context) ────────────────
+    png_bytes: bytes | None = None
+    record = None
+    try:
+        png_bytes, record = _do_purchase(s)
+    except tenbis_flow.AuthExpiredError as exc:
+        log.error("tenbis_auth_expired")
+        error_text = (
+            f"10bis session expired — run `mise run login:tenbis` on your laptop "
+            f"then `mise run sync:profiles`\n\nDetails: {exc}"
+        )
+    except Exception as exc:
+        log.exception("purchase_failed")
+        error_text = f"Purchase failed: {exc}"
 
-        if png_bytes is None or record is None:
-            # Budget too low — already logged inside _do_purchase
-            raise typer.Exit(0)
+    if error_text:
+        with whatsapp_context(s) as (_, wa_page):
+            whatsapp.send_text(wa_page, f"⚠️ {error_text}", s)
+        sys.exit(1)
 
-        # Step 4: send via the already-open WA context
-        tmp = Path(tempfile.mktemp(suffix=".png"))
-        tmp.write_bytes(png_bytes)
-        try:
-            caption = _make_caption(record)
+    if png_bytes is None or record is None:
+        raise typer.Exit(0)  # budget too low — already logged
+
+    # ── Step 4: WhatsApp — send barcode ───────────────────────────────────────
+    tmp = Path(tempfile.mktemp(suffix=".png"))
+    tmp.write_bytes(png_bytes)
+    try:
+        caption = _make_caption(record)
+        with whatsapp_context(s) as (_, wa_page):
             whatsapp.send_barcode(wa_page, tmp, caption, s)
-            log.info("daily_run_complete", caption=caption)
-        except Exception as exc:
-            log.exception("send_failed")
-            typer.echo(f"⚠️ WA send failed: {exc}", err=True)
-            sys.exit(1)
-        finally:
-            tmp.unlink(missing_ok=True)
-
-    typer.echo("Daily run complete.")
+        log.info("daily_run_complete", caption=caption)
+        typer.echo("Daily run complete.")
+    except Exception as exc:
+        log.exception("send_failed")
+        typer.echo(f"WA send failed: {exc}", err=True)
+        sys.exit(1)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ── internal helpers ──────────────────────────────────────────────────────────
