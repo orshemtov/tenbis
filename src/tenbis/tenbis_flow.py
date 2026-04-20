@@ -102,7 +102,7 @@ def get_budget(page: Page, daily_limit: float, tz: ZoneInfo) -> tuple[float, flo
         raise RuntimeError("Could not read monthly balance from billing page")
 
     spent = today_spent(body, tz)
-    daily_remaining = max(daily_limit - spent, 0.0)
+    daily_remaining = max(min(daily_limit - spent, monthly), 0.0)
 
     logger.info("budget", monthly=monthly, spent_today=spent, daily_remaining=daily_remaining)
     return monthly, daily_remaining
