@@ -33,6 +33,9 @@ else
     echo "    mise already installed: $(mise --version)"
 fi
 
+echo "==> Trusting mise config..."
+mise trust
+
 echo "==> Installing Python + uv via mise..."
 mise install
 
