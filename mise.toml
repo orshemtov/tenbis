@@ -51,10 +51,6 @@ run = "uv run tenbis send-pending"
 description = "Scan WhatsApp reactions; move reacted vouchers to used/"
 run = "uv run tenbis scan-reactions"
 
-[tasks."import:vouchers"]
-description = "Import historical vouchers from WhatsApp into pending/ (run manually as needed)"
-run = "uv run tenbis import-vouchers"
-
 [tasks.run]
 description = "Full daily pipeline: scan reactions → purchase → send (idempotent)"
 run = "uv run tenbis run"
@@ -74,7 +70,7 @@ rsync -av --progress data/whatsapp-profile/ "$SERVER":~/tenbis/data/whatsapp-pro
 echo "Profiles synced to $SERVER"
 """
 
-[tasks."sync:vouchers"]
+[tasks."vouchers:sync"]
 description = "rsync pending/ and used/ vouchers from laptop to server"
 run = """
 set -euo pipefail
