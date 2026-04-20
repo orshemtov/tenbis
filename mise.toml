@@ -66,6 +66,25 @@ rsync -av --progress data/whatsapp-profile/ "$SERVER":~/tenbis/data/whatsapp-pro
 echo "Profiles synced to $SERVER"
 """
 
+[tasks."server:bootstrap"]
+description = "One-time: clone repo on server and run bootstrap (install mise, uv, Chromium, deps)"
+run = """
+set -euo pipefail
+if [ -z "${SERVER:-}" ]; then
+  echo "Set SERVER in .env or export SERVER=user@host"
+  exit 1
+fi
+ssh -t "$SERVER" '
+  set -euo pipefail
+  if [ -d ~/tenbis/.git ]; then
+    echo "~/tenbis already exists — skipping clone"
+  else
+    git clone https://github.com/orshemtov/tenbis.git ~/tenbis
+  fi
+  cd ~/tenbis && bash scripts/bootstrap-server.sh
+'
+"""
+
 [tasks.deploy]
 description = "Push local commits then pull + reinstall on the server"
 run = """
