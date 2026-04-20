@@ -4,6 +4,7 @@ Use `mise run <task>` for the canonical interface; the commands below are what e
 """
 
 import sys
+import datetime as dt
 from pathlib import Path
 
 import typer
@@ -13,10 +14,13 @@ from tenbis.browser import tenbis_context, whatsapp_context
 from tenbis.logger import get_logger, setup_logger
 from tenbis.settings import Settings
 from tenbis.vouchers import (
+    VoucherRecord,
     load_pending_records,
     move_to_used,
+    save_imported,
     save_pending,
     today_voucher_exists,
+    tracked_message_ids,
     update_message_id,
 )
 
@@ -201,6 +205,52 @@ def scan_reactions() -> None:
                 log.info("voucher_used", old=str(png_path), new=str(new_path))
 
     typer.echo(f"Scanned {len(records)} voucher(s). Moved {moved} to used/.")
+
+
+# ── import vouchers command ───────────────────────────────────────────────────
+
+
+@app.command("import-vouchers")
+def import_vouchers(
+    scroll_passes: int = typer.Option(10, help="Number of upward scroll passes to load history."),
+) -> None:
+    """Import historical vouchers from WhatsApp into pending/.
+
+    Scans the group conversation for outgoing voucher images that aren't yet
+    tracked in pending/ or used/, and creates stub records so scan-reactions
+    can pick them up.
+    """
+    s = _settings()
+    log = get_logger()
+
+    already = tracked_message_ids(s)
+    imported = 0
+
+    with whatsapp_context(s) as (_, page):
+        whatsapp.check_auth(page)
+        vouchers = whatsapp.scrape_sent_vouchers(page, s.whatsapp_group_name, scroll_passes)
+
+    for v in vouchers:
+        if v["message_id"] in already:
+            log.info("import_skip_already_tracked", message_id=v["message_id"])
+            continue
+        purchased_at = (
+            dt.datetime.fromtimestamp(v["timestamp"], tz=dt.timezone.utc).isoformat()
+            if v["timestamp"]
+            else dt.datetime.now(tz=dt.timezone.utc).isoformat()
+        )
+        record = VoucherRecord(
+            barcode_number=v["barcode_number"],
+            amount=v["amount"],
+            purchased_at=purchased_at,
+            whatsapp_group=s.whatsapp_group_name,
+            whatsapp_message_id=v["message_id"],
+        )
+        save_imported(record, s)
+        imported += 1
+        log.info("imported_voucher", barcode=v["barcode_number"], amount=v["amount"])
+
+    typer.echo(f"Found {len(vouchers)} voucher(s) in history. Imported {imported} new.")
 
 
 # ── full daily pipeline ───────────────────────────────────────────────────────

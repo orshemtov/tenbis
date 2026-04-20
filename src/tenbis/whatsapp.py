@@ -3,6 +3,7 @@
 All selectors are imported from selectors.py — no CSS strings here.
 """
 
+import re
 from pathlib import Path
 
 from playwright.sync_api import Page
@@ -193,6 +194,66 @@ def react_to_message(page: Page, message_id: str, emoji: str) -> None:
     )
     if result != "ok":
         get_logger(message_id=message_id).warning("react_failed", result=result)
+
+
+# Caption format written by send_barcode: "Shufersal voucher ₪{amount} | {barcode}"
+_CAPTION_RE = re.compile(r"Shufersal voucher\s+₪([\d.]+)\s*\|\s*(\S+)", re.IGNORECASE)
+
+
+def scrape_sent_vouchers(page: Page, group_name: str, scroll_passes: int = 10) -> list[dict]:
+    """Scan the group's message history and return untracked sent vouchers.
+
+    Each result dict has: message_id, amount (float), barcode_number, caption.
+    scroll_passes controls how far back into history to scroll (each pass scrolls
+    the chat viewport to the top and waits for older messages to load).
+    """
+    open_group(page, group_name)
+
+    # Scroll up to load history
+    for _ in range(scroll_passes):
+        page.keyboard.press("Home")
+        page.wait_for_timeout(1_200)
+
+    # Use the WA Web in-memory store to get all loaded messages in one shot.
+    # This is more reliable than DOM scraping and handles virtualised lists.
+    raw = page.evaluate(
+        """
+        () => {
+            try {
+                const store = window.require('WAWebCollections');
+                const msgs = store.Msg.getModelsArray();
+                return msgs
+                    .filter(m => m.id && m.id.fromMe && (m.type === 'image' || m.caption))
+                    .map(m => ({
+                        id: m.id._serialized || m.id.id || '',
+                        caption: m.caption || m.body || '',
+                        timestamp: m.t || 0,
+                    }));
+            } catch (e) {
+                return [];
+            }
+        }
+        """
+    )
+
+    results = []
+    for entry in raw or []:
+        caption = entry.get("caption", "")
+        m = _CAPTION_RE.search(caption)
+        if not m:
+            continue
+        results.append(
+            {
+                "message_id": entry["id"],
+                "amount": float(m.group(1)),
+                "barcode_number": m.group(2),
+                "caption": caption,
+                "timestamp": entry.get("timestamp", 0),
+            }
+        )
+
+    get_logger(group=group_name, found=len(results)).info("scrape_sent_vouchers_done")
+    return results
 
 
 def _last_sent_message_id(page: Page) -> str:

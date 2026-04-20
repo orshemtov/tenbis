@@ -66,6 +66,38 @@ def today_voucher_exists(settings: Settings) -> bool:
     return False
 
 
+def tracked_message_ids(settings: Settings) -> set[str]:
+    """Return all whatsapp_message_ids already in pending/ or used/."""
+    ids: set[str] = set()
+    for directory in (settings.pending_dir, settings.used_dir):
+        if not directory.exists():
+            continue
+        for json_path in directory.glob("*.json"):
+            try:
+                record = VoucherRecord.model_validate_json(json_path.read_text(encoding="utf-8"))
+                if record.whatsapp_message_id:
+                    ids.add(record.whatsapp_message_id)
+            except Exception:
+                pass
+    return ids
+
+
+def save_imported(record: VoucherRecord, settings: Settings) -> Path:
+    """Write a stub .png + .json to pending/ for an imported voucher. Returns the PNG path."""
+    settings.pending_dir.mkdir(parents=True, exist_ok=True)
+    stem = _stem(record.barcode_number, record.purchased_at)
+    png_path = settings.pending_dir / f"{stem}.png"
+    json_path = settings.pending_dir / f"{stem}.json"
+    # 1×1 transparent PNG as placeholder — the real image lives in WhatsApp
+    png_path.write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+        b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    json_path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+    return png_path
+
+
 def load_pending_records(settings: Settings) -> list[tuple[Path, VoucherRecord]]:
     """Return all (png_path, VoucherRecord) pairs from pending/ that have a message_id."""
     results = []

@@ -76,3 +76,11 @@ WHATSAPP_REACTION_CONTAINER = '[data-testid="msg-reactions"], [class*="reaction"
 
 # Outgoing text message input
 WHATSAPP_TEXT_INPUT = '[aria-label="Type a message"], [aria-label*="Type a message"]'
+
+# History import — outgoing image messages with a caption
+# Outgoing messages have a row with data-id; the caption lives in a neighbouring span
+WHATSAPP_OUTGOING_IMAGE_CAPTION = (
+    '[data-id] [data-testid="media-caption-rich-text"] span[dir],'
+    '[data-id] [data-testid="msg-image"] + * span[dir],'
+    "[data-id] span.selectable-text[dir]"
+)
