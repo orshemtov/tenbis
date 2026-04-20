@@ -4,7 +4,7 @@ Use `mise run <task>` for the canonical interface; the commands below are what e
 """
 
 import sys
-import datetime as dt
+import tempfile
 from pathlib import Path
 
 import typer
@@ -13,16 +13,7 @@ from tenbis import tenbis_flow, whatsapp
 from tenbis.browser import tenbis_context, whatsapp_context
 from tenbis.logger import get_logger, setup_logger
 from tenbis.settings import Settings
-from tenbis.vouchers import (
-    VoucherRecord,
-    load_pending_records,
-    move_to_used,
-    save_imported,
-    save_pending,
-    today_voucher_exists,
-    tracked_message_ids,
-    update_message_id,
-)
+from tenbis.vouchers import VoucherRecord
 
 app = typer.Typer(help="10bis → Shufersal voucher automation", add_completion=False)
 
@@ -34,6 +25,11 @@ def _settings() -> Settings:
     return s
 
 
+def _make_caption(record: VoucherRecord) -> str:
+    date = record.purchased_at[:10]  # "2026-04-20"
+    return f"Shufersal voucher ₪{record.amount:.0f} | {record.barcode_number} | {date}"
+
+
 # ── auth commands ─────────────────────────────────────────────────────────────
 
 
@@ -42,7 +38,7 @@ def login_tenbis() -> None:
     """Open a headed browser and log in to 10bis (run on your laptop)."""
     s = Settings()
     s.ensure_dirs()
-    s.headless = False  # always headed for interactive login
+    s.headless = False
     setup_logger(debug=True, log_format=s.log_format)
     with tenbis_context(s) as (_, page):
         tenbis_flow.do_login(page, s.tenbis_email)
@@ -54,7 +50,7 @@ def login_whatsapp() -> None:
     """Open a headed browser and log in to WhatsApp Web via QR code (run on your laptop)."""
     s = Settings()
     s.ensure_dirs()
-    s.headless = False  # always headed for interactive login
+    s.headless = False
     setup_logger(debug=True, log_format=s.log_format)
     with whatsapp_context(s) as (_, page):
         whatsapp.do_login(page)
@@ -74,21 +70,176 @@ def budget() -> None:
     typer.echo(f"Monthly balance: ₪{monthly:.0f}  |  Daily remaining: ₪{daily_remaining:.0f}")
 
 
+@app.command("list-vouchers")
+def list_vouchers() -> None:
+    """Scan the WhatsApp group and show active / acknowledged vouchers."""
+    s = _settings()
+    with whatsapp_context(s) as (_, page):
+        whatsapp.check_auth(page)
+        whatsapp.open_group(page, s.whatsapp_group_name)
+        msgs = whatsapp.scan_voucher_messages(page, s)
+
+    if not msgs:
+        typer.echo("No voucher messages found in the group.")
+        return
+
+    active = [m for m in msgs if not m.user_reacted]
+    used_pending = [m for m in msgs if m.user_reacted and not m.bot_acked]
+    acked = [m for m in msgs if m.bot_acked]
+
+    if active:
+        typer.echo(f"Active ({len(active)}):")
+        for m in active:
+            typer.echo(f"  {m.caption}")
+    if used_pending:
+        typer.echo(f"Used — pending bot ack ({len(used_pending)}):")
+        for m in used_pending:
+            typer.echo(f"  {m.caption}")
+    if acked:
+        typer.echo(f"Acknowledged ({len(acked)}):")
+        for m in acked:
+            typer.echo(f"  {m.caption}")
+
+
 # ── purchase command ──────────────────────────────────────────────────────────
 
 
 @app.command()
 def purchase() -> None:
-    """Purchase a Shufersal voucher and save it to data/vouchers/pending/.
+    """Purchase a Shufersal voucher and send it to the WhatsApp group immediately.
 
-    Set DRY_RUN=true to do a full rehearsal without placing the order.
+    Set DRY_RUN=true to rehearse without placing the order.
     """
     s = _settings()
     log = get_logger(dry_run=s.dry_run)
 
-    if not s.dry_run and today_voucher_exists(s):
-        typer.echo("Already purchased a voucher today. Nothing to do.")
+    png_bytes, record = _do_purchase(s)
+    if png_bytes is None or record is None:
         raise typer.Exit(0)
+
+    tmp = Path(tempfile.mktemp(suffix=".png"))
+    tmp.write_bytes(png_bytes)
+    try:
+        caption = _make_caption(record)
+        with whatsapp_context(s) as (_, page):
+            whatsapp.check_auth(page)
+            whatsapp.send_barcode(page, tmp, caption, s)
+        log.info("voucher_sent", caption=caption)
+        typer.echo(f"Sent: {caption}")
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+# ── scan reactions command ────────────────────────────────────────────────────
+
+
+@app.command("scan-reactions")
+def scan_reactions() -> None:
+    """Scan WhatsApp for used vouchers (any user reaction) and acknowledge with 🤖."""
+    s = _settings()
+    with whatsapp_context(s) as (_, page):
+        whatsapp.check_auth(page)
+        whatsapp.open_group(page, s.whatsapp_group_name)
+        acked = _ack_used_vouchers(page, s)
+        msgs = whatsapp.scan_voucher_messages(page, s)
+
+    active = sum(1 for m in msgs if not m.user_reacted)
+    typer.echo(f"Active: {active}  Just acknowledged: {acked}  Total scanned: {len(msgs)}")
+
+
+# ── full daily pipeline ───────────────────────────────────────────────────────
+
+
+@app.command()
+def run() -> None:
+    """Full daily pipeline: scan reactions → purchase → send to WhatsApp.
+
+    Idempotent: if a voucher was already sent today it exits early.
+    """
+    s = _settings()
+    log = get_logger()
+
+    with whatsapp_context(s) as (_, wa_page):
+        try:
+            whatsapp.check_auth(wa_page)
+            whatsapp.open_group(wa_page, s.whatsapp_group_name)
+        except whatsapp.WAAuthExpiredError as exc:
+            log.error("whatsapp_auth_expired")
+            typer.echo(f"⚠️ WhatsApp session expired: {exc}", err=True)
+            sys.exit(1)
+
+        # Step 1: acknowledge any newly-used vouchers
+        try:
+            _ack_used_vouchers(wa_page, s)
+        except Exception as exc:
+            log.exception("ack_failed")
+            # Non-fatal — continue
+
+        # Step 2: idempotency check
+        if whatsapp.sent_today(wa_page, s):
+            log.info("already_sent_today")
+            typer.echo("Already sent a voucher today. Nothing to do.")
+            raise typer.Exit(0)
+
+        # Step 3: purchase (separate 10bis browser context)
+        try:
+            png_bytes, record = _do_purchase(s)
+        except tenbis_flow.AuthExpiredError as exc:
+            log.error("tenbis_auth_expired")
+            whatsapp.send_text(
+                wa_page,
+                f"⚠️ 10bis session expired — run `mise run login:tenbis` on your laptop "
+                f"then `mise run sync:profiles`\n\nDetails: {exc}",
+                s,
+            )
+            sys.exit(1)
+        except Exception as exc:
+            log.exception("purchase_failed")
+            whatsapp.send_text(wa_page, f"⚠️ Purchase failed: {exc}", s)
+            sys.exit(1)
+
+        if png_bytes is None or record is None:
+            # Budget too low — already logged inside _do_purchase
+            raise typer.Exit(0)
+
+        # Step 4: send via the already-open WA context
+        tmp = Path(tempfile.mktemp(suffix=".png"))
+        tmp.write_bytes(png_bytes)
+        try:
+            caption = _make_caption(record)
+            whatsapp.send_barcode(wa_page, tmp, caption, s)
+            log.info("daily_run_complete", caption=caption)
+        except Exception as exc:
+            log.exception("send_failed")
+            typer.echo(f"⚠️ WA send failed: {exc}", err=True)
+            sys.exit(1)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    typer.echo("Daily run complete.")
+
+
+# ── internal helpers ──────────────────────────────────────────────────────────
+
+
+def _ack_used_vouchers(wa_page, s: Settings) -> int:
+    """React with BOT_REACTION to any voucher that has user reactions but no bot ack.
+
+    Returns the count of newly acknowledged messages.
+    """
+    msgs = whatsapp.scan_voucher_messages(wa_page, s)
+    count = 0
+    for msg in msgs:
+        if msg.user_reacted and not msg.bot_acked:
+            whatsapp.react_to_message(wa_page, msg.message_id, whatsapp.BOT_REACTION)
+            get_logger().info("voucher_acked", caption=msg.caption)
+            count += 1
+    return count
+
+
+def _do_purchase(s: Settings) -> tuple[bytes | None, VoucherRecord | None]:
+    """Run the 10bis purchase flow. Returns (png_bytes, record) or (None, None) if skipped."""
+    log = get_logger(dry_run=s.dry_run)
 
     with tenbis_context(s) as (_, page):
         tenbis_flow.check_auth(page)
@@ -103,273 +254,18 @@ def purchase() -> None:
             )
             typer.echo(
                 f"Budget too low (monthly=₪{monthly:.0f} daily_remaining=₪{daily_remaining:.0f}). "
-                f"Required: ₪{s.item.amount:.0f}. Nothing purchased.",
+                f"Required: ₪{s.item.amount:.0f}. Skipping.",
                 err=True,
             )
-            raise typer.Exit(0)
+            return None, None
 
         try:
             png_bytes, record = tenbis_flow.purchase_voucher(page, s)
         except RuntimeError as exc:
             if s.dry_run:
                 typer.echo(f"Dry run complete: {exc}")
-                raise typer.Exit(0)
+                return None, None
             raise
 
-    png_path = save_pending(record, png_bytes, s)
-    log.info("voucher_saved", path=str(png_path))
-    typer.echo(f"Voucher saved: {png_path}")
-
-
-@app.command("send-text")
-def send_text(message: str) -> None:
-    """Send a plain text message to the configured WhatsApp group."""
-    s = _settings()
-    with whatsapp_context(s) as (_, page):
-        whatsapp.check_auth(page)
-        whatsapp.send_text(page, message, s)
-    typer.echo(f"Sent: {message}")
-
-
-# ── send command ──────────────────────────────────────────────────────────────
-
-
-@app.command("send-pending")
-def send_pending() -> None:
-    """Send any vouchers in pending/ that haven't been sent to WhatsApp yet."""
-    s = _settings()
-    log = get_logger()
-
-    # Find pending vouchers without a message_id yet
-    if not s.pending_dir.exists():
-        typer.echo("No pending vouchers.")
-        return
-
-    sent = 0
-    with whatsapp_context(s) as (_, page):
-        whatsapp.check_auth(page)
-
-        for json_path in sorted(s.pending_dir.glob("*.json")):
-            from tenbis.vouchers import VoucherRecord
-
-            record = VoucherRecord.model_validate_json(json_path.read_text(encoding="utf-8"))
-            if record.whatsapp_message_id:
-                continue  # already sent
-
-            png_path = json_path.with_suffix(".png")
-            if not png_path.exists():
-                log.warning("png_missing", json=str(json_path))
-                continue
-
-            caption = f"Shufersal voucher ₪{record.amount:.0f} | {record.barcode_number}"
-            msg_id = whatsapp.send_barcode(page, png_path, caption, s)
-            update_message_id(png_path, msg_id)
-            sent += 1
-            log.info("voucher_sent", png=str(png_path), message_id=msg_id)
-
-    typer.echo(f"Sent {sent} voucher(s) to {s.whatsapp_group_name}.")
-
-
-# ── scan reactions command ────────────────────────────────────────────────────
-
-
-@app.command("scan-reactions")
-def scan_reactions() -> None:
-    """Check pending vouchers for WhatsApp reactions; move reacted ones to used/."""
-    s = _settings()
-    log = get_logger()
-
-    records = load_pending_records(s)
-    if not records:
-        log.info("no_pending_vouchers")
-        typer.echo("No pending vouchers to scan.")
-        return
-
-    moved = 0
-    with whatsapp_context(s) as (_, page):
-        whatsapp.check_auth(page)
-        page.click(whatsapp.selectors.WHATSAPP_SEARCH_BOX, timeout=10_000)
-        page.wait_for_timeout(500)
-        page.locator(whatsapp.selectors.WHATSAPP_SEARCH_INPUT).fill(s.whatsapp_group_name)
-        page.wait_for_timeout(1_500)
-        titles = page.locator(whatsapp.selectors.WHATSAPP_CHAT_RESULT_TITLE)
-        for i in range(titles.count()):
-            if (titles.nth(i).get_attribute("title") or "").strip() == s.whatsapp_group_name:
-                titles.nth(i).click()
-                break
-        page.wait_for_timeout(2_000)
-        for png_path, record in records:
-            if whatsapp.has_reaction(page, record.whatsapp_message_id):
-                new_path = move_to_used(png_path, s)
-                moved += 1
-                log.info("voucher_used", old=str(png_path), new=str(new_path))
-
-    typer.echo(f"Scanned {len(records)} voucher(s). Moved {moved} to used/.")
-
-
-# ── import vouchers command ───────────────────────────────────────────────────
-
-
-@app.command("import-vouchers")
-def import_vouchers(
-    scroll_passes: int = typer.Option(10, help="Number of upward scroll passes to load history."),
-) -> None:
-    """Import historical vouchers from WhatsApp into pending/.
-
-    Scans the group conversation for outgoing voucher images that aren't yet
-    tracked in pending/ or used/, and creates stub records so scan-reactions
-    can pick them up.
-    """
-    s = _settings()
-    log = get_logger()
-
-    already = tracked_message_ids(s)
-    imported = 0
-
-    with whatsapp_context(s) as (_, page):
-        whatsapp.check_auth(page)
-        vouchers = whatsapp.scrape_sent_vouchers(page, s.whatsapp_group_name, scroll_passes)
-
-    for v in vouchers:
-        if v["message_id"] in already:
-            log.info("import_skip_already_tracked", message_id=v["message_id"])
-            continue
-        purchased_at = (
-            dt.datetime.fromtimestamp(v["timestamp"], tz=dt.timezone.utc).isoformat()
-            if v["timestamp"]
-            else dt.datetime.now(tz=dt.timezone.utc).isoformat()
-        )
-        record = VoucherRecord(
-            barcode_number=v["barcode_number"],
-            amount=v["amount"],
-            purchased_at=purchased_at,
-            whatsapp_group=s.whatsapp_group_name,
-            whatsapp_message_id=v["message_id"],
-        )
-        save_imported(record, s)
-        imported += 1
-        log.info("imported_voucher", barcode=v["barcode_number"], amount=v["amount"])
-
-    typer.echo(f"Found {len(vouchers)} voucher(s) in history. Imported {imported} new.")
-
-
-# ── full daily pipeline ───────────────────────────────────────────────────────
-
-
-@app.command()
-def run() -> None:
-    """Full daily pipeline: scan reactions → purchase → send to WhatsApp.
-
-    This is what the systemd timer calls at 09:00 every day. It is idempotent:
-    running it twice in a day will skip the purchase on the second call.
-    """
-    s = _settings()
-    log = get_logger()
-
-    # Step 1: scan reactions (move used vouchers)
-    try:
-        _run_scan_reactions(s)
-    except Exception as exc:
-        log.exception("scan_reactions_failed")
-        _alert(s, f"scan-reactions failed: {exc}")
-        # Not fatal — continue with purchase
-
-    # Step 2: idempotency check
-    if today_voucher_exists(s):
-        log.info("already_purchased_today")
-        typer.echo("Already purchased a voucher today. Nothing to do.")
-        raise typer.Exit(0)
-
-    # Step 3: purchase
-    try:
-        png_path = _run_purchase(s)
-    except tenbis_flow.AuthExpiredError as exc:
-        log.error("tenbis_auth_expired")
-        _alert(
-            s,
-            f"⚠️ 10bis session expired — run `mise run login:tenbis` on your laptop then `mise run sync:profiles`\n\nDetails: {exc}",  # noqa: E501
-        )
-        sys.exit(1)
-    except Exception as exc:
-        log.exception("purchase_failed")
-        _alert(s, f"⚠️ Purchase failed: {exc}")
-        sys.exit(1)
-
-    if png_path is None:
-        # Budget too low — already logged inside _run_purchase
-        raise typer.Exit(0)
-
-    # Step 4: send to WhatsApp
-    try:
-        _run_send(s, png_path)
-    except whatsapp.WAAuthExpiredError as exc:
-        log.error("whatsapp_auth_expired")
-        # Can't alert via WA — just log
-        typer.echo(f"⚠️ WhatsApp session expired: {exc}", err=True)
-        sys.exit(1)
-    except Exception as exc:
-        log.exception("send_failed")
-        _alert(s, f"⚠️ Send to WhatsApp failed: {exc}")
-        sys.exit(1)
-
-    typer.echo("Daily run complete.")
-
-
-# ── internal pipeline helpers ─────────────────────────────────────────────────
-
-
-def _run_scan_reactions(s: Settings) -> None:
-    records = load_pending_records(s)
-    if not records:
-        return
-    with whatsapp_context(s) as (_, page):
-        whatsapp.check_auth(page)
-        whatsapp.open_group(page, s.whatsapp_group_name)
-        page.wait_for_timeout(2_000)
-        for png_path, record in records:
-            if whatsapp.has_reaction(page, record.whatsapp_message_id):
-                move_to_used(png_path, s)
-                whatsapp.react_to_message(page, record.whatsapp_message_id, whatsapp.USED_REACTION)
-                get_logger().info("voucher_used", png=str(png_path))
-
-
-def _run_purchase(s: Settings) -> Path | None:
-    """Return the PNG path on success, None if budget is too low."""
-    with tenbis_context(s) as (_, page):
-        tenbis_flow.check_auth(page)
-        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit)
-
-        if monthly < s.tenbis_min_monthly_balance or daily_remaining < s.item.amount:
-            get_logger(monthly=monthly, daily_remaining=daily_remaining).warning("budget_too_low")
-            typer.echo(
-                f"Budget too low (monthly=₪{monthly:.0f} daily_remaining=₪{daily_remaining:.0f}). Skipping.",  # noqa: E501
-                err=True,
-            )
-            return None
-
-        png_bytes, record = tenbis_flow.purchase_voucher(page, s)
-
-    return save_pending(record, png_bytes, s)
-
-
-def _run_send(s: Settings, png_path: Path) -> None:
-    from tenbis.vouchers import VoucherRecord
-
-    json_path = png_path.with_suffix(".json")
-    record = VoucherRecord.model_validate_json(json_path.read_text(encoding="utf-8"))
-    caption = f"Shufersal voucher ₪{record.amount:.0f} | {record.barcode_number}"
-
-    with whatsapp_context(s) as (_, page):
-        whatsapp.check_auth(page)
-        msg_id = whatsapp.send_barcode(page, png_path, caption, s)
-        update_message_id(png_path, msg_id)
-
-
-def _alert(s: Settings, message: str) -> None:
-    """Best-effort: send a warning text to the WhatsApp group."""
-    try:
-        with whatsapp_context(s) as (_, page):
-            whatsapp.check_auth(page)
-            whatsapp.send_text(page, message, s)
-    except Exception:
-        get_logger().exception("alert_failed")
+    log.info("voucher_purchased", barcode=record.barcode_number, amount=record.amount)
+    return png_bytes, record

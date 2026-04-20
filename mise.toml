@@ -44,11 +44,11 @@ description = "Purchase a Shufersal 200 ILS voucher"
 run = "uv run tenbis purchase"
 
 [tasks.send]
-description = "Send any unsent vouchers in pending/ to the WhatsApp group"
-run = "uv run tenbis send-pending"
+description = "Purchase a Shufersal voucher and send it to WhatsApp immediately"
+run = "uv run tenbis purchase"
 
 [tasks.scan]
-description = "Scan WhatsApp reactions; move reacted vouchers to used/"
+description = "Scan WhatsApp for used vouchers (any reaction) and acknowledge with 🤖"
 run = "uv run tenbis scan-reactions"
 
 [tasks.run]
@@ -70,18 +70,9 @@ rsync -av --progress data/whatsapp-profile/ "$SERVER":~/tenbis/data/whatsapp-pro
 echo "Profiles synced to $SERVER"
 """
 
-[tasks."vouchers:sync"]
-description = "rsync pending/ and used/ vouchers from laptop to server"
-run = """
-set -euo pipefail
-if [ -z "${SERVER:-}" ]; then
-  echo "Set SERVER in .env or export SERVER=user@host"
-  exit 1
-fi
-rsync -av --progress data/pending/ "$SERVER":~/tenbis/data/pending/
-rsync -av --progress data/used/    "$SERVER":~/tenbis/data/used/
-echo "Vouchers synced to $SERVER"
-"""
+[tasks."vouchers:list"]
+description = "Show active and acknowledged vouchers by scanning the WhatsApp group"
+run = "uv run tenbis list-vouchers"
 
 [tasks."server:bootstrap"]
 description = "One-time: clone repo on server and run bootstrap (install mise, uv, Chromium, deps)"

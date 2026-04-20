@@ -3,7 +3,8 @@
 All selectors are imported from selectors.py — no CSS strings here.
 """
 
-import re
+import dataclasses
+import datetime as dt
 from pathlib import Path
 
 from playwright.sync_api import Page
@@ -17,12 +18,31 @@ class GroupNotFoundError(Exception):
     """The configured WhatsApp group name was not found."""
 
 
-class NotAGroupError(Exception):
-    """The search result matched but is not a group chat."""
-
-
 class WAAuthExpiredError(Exception):
     """WhatsApp session expired. Run `mise run login:whatsapp` then sync profiles."""
+
+
+# ── constants ─────────────────────────────────────────────────────────────────
+
+# Reaction the bot adds to acknowledge a used voucher
+BOT_REACTION = "🤖"
+
+# Caption prefix written by this bot when sending a barcode image
+CAPTION_PREFIX = "Shufersal voucher ₪"
+
+# Emojis available in WA's default 6-emoji quick-tray (no picker needed)
+_QUICK_TRAY_EMOJIS = {"👍", "❤️", "😂", "😮", "😢", "🙏"}
+
+
+# ── data model ────────────────────────────────────────────────────────────────
+
+
+@dataclasses.dataclass
+class VoucherMessage:
+    message_id: str
+    caption: str
+    user_reacted: bool  # any family-member reaction present
+    bot_acked: bool  # BOT_REACTION (🤖) present — means bot already acknowledged
 
 
 # ── auth ──────────────────────────────────────────────────────────────────────
@@ -60,17 +80,14 @@ def do_login(page: Page) -> None:
 
 def open_group(page: Page, group_name: str) -> None:
     """Search for group_name and open it, validating it is a group chat."""
-    # Click the search box and clear it
     page.click(selectors.WHATSAPP_SEARCH_BOX, timeout=10_000)
     page.wait_for_timeout(500)
     page.keyboard.press("Control+a")
     page.keyboard.press("Backspace")
 
-    # Type the group name
     page.keyboard.type(group_name, delay=60)
     page.wait_for_timeout(1_500)
 
-    # Find the matching result — exact title match
     results = page.locator(selectors.WHATSAPP_CHAT_RESULT_TITLE)
     count = results.count()
     if count == 0:
@@ -94,17 +111,13 @@ def open_group(page: Page, group_name: str) -> None:
 
     page.wait_for_timeout(2_000)
 
-    # Validate it's a group (subtitle lists participants)
     try:
         subtitle = page.locator(selectors.WHATSAPP_ACTIVE_CHAT_SUBTITLE).first.inner_text(
             timeout=5_000
         )
-        # Groups have a subtitle like "You, Wife" or "3 participants"; DMs just show a phone number / status  # noqa: E501
-        # The heuristic: if the subtitle contains a comma or "participant" it's a group
         if "," not in subtitle and "participant" not in subtitle.lower():
             get_logger(subtitle=subtitle).warning("group_subtitle_unexpected")
     except Exception:
-        # Subtitle not found — not a blocking error, just log and continue
         get_logger().warning("group_subtitle_not_found")
 
     get_logger(group=group_name).info("group_opened")
@@ -117,8 +130,6 @@ def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings)
     """Send an image to the configured WhatsApp group. Returns the message data-id."""
     open_group(page, settings.whatsapp_group_name)
 
-    # Open the attach menu, click "Photos & videos", and set the file via the
-    # native file chooser — this routes through the photo pipeline, not stickers.
     page.click(selectors.WHATSAPP_ATTACH_BUTTON, timeout=10_000)
     page.wait_for_timeout(500)
     with page.expect_file_chooser(timeout=10_000) as fc_info:
@@ -126,7 +137,6 @@ def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings)
     fc_info.value.set_files(str(image_path))
     page.wait_for_timeout(2_000)
 
-    # Add caption
     try:
         caption_box = page.locator(selectors.WHATSAPP_CAPTION_INPUT).first
         caption_box.click(timeout=5_000)
@@ -134,11 +144,9 @@ def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings)
     except Exception:
         get_logger().warning("caption_input_not_found_skipping")
 
-    # Send — force=True bypasses any overlay (e.g. the attach dropdown) that may still be visible
     page.locator(selectors.WHATSAPP_SEND_BUTTON).click(timeout=10_000, force=True)
     page.wait_for_timeout(3_000)
 
-    # Capture the data-id of the most recent outgoing message
     message_id = _last_sent_message_id(page)
     get_logger(group=settings.whatsapp_group_name, message_id=message_id).info("barcode_sent")
     return message_id
@@ -154,28 +162,80 @@ def send_text(page: Page, text: str, settings: Settings) -> None:
     get_logger(group=settings.whatsapp_group_name).info("text_sent")
 
 
-# ── scan reactions ────────────────────────────────────────────────────────────
-
-USED_REACTION = "👍"
+# ── scan ──────────────────────────────────────────────────────────────────────
 
 
-def has_reaction(page: Page, message_id: str) -> bool:
-    """Return True if the message with the given data-id has any emoji reaction."""
-    selector = selectors.WHATSAPP_MESSAGE_BY_ID.format(message_id=message_id)
-    try:
-        msg_el = page.locator(selector).first
-        # Scroll the message into view
-        msg_el.scroll_into_view_if_needed(timeout=5_000)
-        page.wait_for_timeout(500)
-        reaction_el = msg_el.locator(selectors.WHATSAPP_REACTION_CONTAINER)
-        return reaction_el.count() > 0
-    except Exception:
-        return False
+def scan_voucher_messages(page: Page, s: Settings) -> list[VoucherMessage]:
+    """Scan the currently open WA group for bot-sent barcode messages.
+
+    Uses JS to query the live DOM — finds all [data-id] elements whose visible
+    text contains CAPTION_PREFIX, then reads their reaction buttons.
+    """
+    page.wait_for_timeout(1_000)  # let messages render
+
+    raw: list[dict] = page.evaluate(
+        """([prefix, botReaction]) => {
+            const results = [];
+            document.querySelectorAll('[data-id]').forEach(el => {
+                const dataId = el.getAttribute('data-id');
+                if (!dataId || dataId.startsWith('album-')) return;
+
+                // Find a span containing our caption prefix
+                let caption = '';
+                for (const span of el.querySelectorAll('span[dir]')) {
+                    if ((span.textContent || '').includes(prefix)) {
+                        caption = span.textContent.trim();
+                        break;
+                    }
+                }
+                if (!caption) return;
+
+                // Read reactions
+                const reactionEl = el.querySelector('[data-testid="msg-reactions"]');
+                const btns = reactionEl
+                    ? Array.from(reactionEl.querySelectorAll('button,[role="button"]'))
+                    : [];
+                const allText = btns
+                    .map(b => (b.getAttribute('aria-label') || '') + (b.textContent || ''))
+                    .join('');
+
+                results.push({
+                    messageId: dataId,
+                    caption,
+                    userReacted: btns.length > 0,
+                    botAcked: allText.includes(botReaction),
+                });
+            });
+            return results;
+        }""",
+        [CAPTION_PREFIX, BOT_REACTION],
+    )
+
+    return [
+        VoucherMessage(
+            message_id=r["messageId"],
+            caption=r["caption"],
+            user_reacted=r["userReacted"],
+            bot_acked=r["botAcked"],
+        )
+        for r in raw
+    ]
+
+
+def sent_today(page: Page, s: Settings) -> bool:
+    """Return True if the bot already sent a voucher message today."""
+    today = dt.date.today().isoformat()  # "2026-04-20"
+    return any(today in m.caption for m in scan_voucher_messages(page, s))
+
+
+# ── reactions ─────────────────────────────────────────────────────────────────
 
 
 def react_to_message(page: Page, message_id: str, emoji: str) -> None:
-    """Add an emoji reaction to a message via hover → quick tray.
+    """Add an emoji reaction to a message.
 
+    For emojis in the default quick-tray (_QUICK_TRAY_EMOJIS): hover → tray button.
+    For others (e.g. 🤖): hover → tray → expand → search → click.
     Non-fatal: logs a warning on failure rather than raising.
     """
     selector = selectors.WHATSAPP_MESSAGE_BY_ID.format(message_id=message_id)
@@ -186,95 +246,34 @@ def react_to_message(page: Page, message_id: str, emoji: str) -> None:
         msg_el.hover()
         page.wait_for_timeout(700)  # toolbar appears after ~400 ms
 
-        # Reaction button is in a global overlay — query from page root, not msg_el
         react_btn = page.locator(selectors.WHATSAPP_REACTION_HOVER_BUTTON).first
         react_btn.click(timeout=5_000)
         page.wait_for_timeout(400)
 
-        # Pick the target emoji from the quick tray
-        tray_btn = page.locator(selectors.WHATSAPP_REACTION_QUICK_THUMBSUP).first
-        tray_btn.click(timeout=5_000)
+        if emoji in _QUICK_TRAY_EMOJIS:
+            page.locator(f'button[aria-label="{emoji}"]').first.click(timeout=5_000)
+        else:
+            # Open the full emoji picker via the "+" / "More emojis" button
+            page.locator(selectors.WHATSAPP_REACTION_EXPAND).first.click(timeout=5_000)
+            page.wait_for_timeout(500)
+            search = page.locator(selectors.WHATSAPP_EMOJI_PICKER_SEARCH).first
+            search.fill("robot")
+            page.wait_for_timeout(800)
+            page.locator(selectors.WHATSAPP_EMOJI_PICKER_RESULT.format(emoji=emoji)).first.click(
+                timeout=5_000
+            )
 
         get_logger(message_id=message_id, emoji=emoji).info("reacted_to_message")
     except Exception as exc:
         get_logger(message_id=message_id).warning("react_failed", error=str(exc))
 
 
-# Caption format written by send_barcode: "Shufersal voucher ₪{amount} | {barcode}"
-_CAPTION_RE = re.compile(r"Shufersal voucher\s+₪([\d.]+)\s*\|\s*(\S+)", re.IGNORECASE)
-
-
-def scrape_sent_vouchers(page: Page, group_name: str, scroll_passes: int = 10) -> list[dict]:
-    """Scan the group's message history and return untracked sent vouchers.
-
-    Each result dict has: message_id, amount (float), barcode_number, caption.
-    scroll_passes controls how far back into history to scroll (each pass scrolls
-    the chat viewport to the top and waits for older messages to load).
-    """
-    open_group(page, group_name)
-
-    # Scroll up to load history
-    for _ in range(scroll_passes):
-        page.keyboard.press("Home")
-        page.wait_for_timeout(1_200)
-
-    # Use the WA Web in-memory store to get all loaded messages in one shot.
-    # This is more reliable than DOM scraping and handles virtualised lists.
-    raw = page.evaluate(
-        """
-        () => {
-            const results = [];
-            const msgs = document.querySelectorAll('[data-id]');
-            for (const msg of msgs) {
-                const dataId = msg.getAttribute('data-id');
-                if (!dataId || dataId.startsWith('album-')) continue;
-                // Only outgoing messages (data-id contains 'true' for self-sent)
-                if (!dataId.includes('true')) continue;
-                // Must contain an image
-                const hasImage = msg.querySelector(
-                    'img[src], [data-testid="msg-image"], [data-testid="media-url-provider"]'
-                );
-                if (!hasImage) continue;
-                // Find a caption span
-                const spans = msg.querySelectorAll('span[dir], span.selectable-text');
-                for (const span of spans) {
-                    const text = (span.textContent || '').trim();
-                    if (text.toLowerCase().includes('shufersal voucher')) {
-                        results.push({ id: dataId, caption: text, timestamp: 0 });
-                        break;
-                    }
-                }
-            }
-            return results;
-        }
-        """
-    )
-
-    results = []
-    for entry in raw or []:
-        caption = entry.get("caption", "")
-        m = _CAPTION_RE.search(caption)
-        if not m:
-            continue
-        results.append(
-            {
-                "message_id": entry["id"],
-                "amount": float(m.group(1)),
-                "barcode_number": m.group(2),
-                "caption": caption,
-                "timestamp": entry.get("timestamp", 0),
-            }
-        )
-
-    get_logger(group=group_name, found=len(results)).info("scrape_sent_vouchers_done")
-    return results
+# ── internals ─────────────────────────────────────────────────────────────────
 
 
 def _last_sent_message_id(page: Page) -> str:
     """Return the data-id of the most recently sent outgoing message, or empty string."""
     try:
-        # Message data-id format changed in newer WA Web — no longer uses true_ prefix.
-        # Exclude album containers (their IDs start with "album-").
         msgs = page.locator("[data-id]")
         count = msgs.count()
         for i in range(count - 1, -1, -1):

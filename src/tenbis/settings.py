@@ -60,18 +60,6 @@ class Settings(BaseSettings):
         return self.data_dir / "whatsapp-profile"
 
     @property
-    def vouchers_dir(self) -> Path:
-        return self.data_dir / "vouchers"
-
-    @property
-    def pending_dir(self) -> Path:
-        return self.vouchers_dir / "pending"
-
-    @property
-    def used_dir(self) -> Path:
-        return self.vouchers_dir / "used"
-
-    @property
     def debug_dir(self) -> Path:
         return self.data_dir / "debug"
 
@@ -79,8 +67,6 @@ class Settings(BaseSettings):
         for d in (
             self.tenbis_profile_dir,
             self.whatsapp_profile_dir,
-            self.pending_dir,
-            self.used_dir,
             self.debug_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)

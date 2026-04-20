@@ -85,13 +85,16 @@ WHATSAPP_REACTION_HOVER_BUTTON = (
     '[aria-label="React"],'
     '[aria-label*="React"]'
 )
-# 👍 button in the quick reaction tray (always present in the default 6)
-WHATSAPP_REACTION_QUICK_THUMBSUP = 'button[aria-label="👍"],button[aria-label*="thumbs up" i]'
 
-# History import — outgoing image messages with a caption
-# Outgoing messages have a row with data-id; the caption lives in a neighbouring span
-WHATSAPP_OUTGOING_IMAGE_CAPTION = (
-    '[data-id] [data-testid="media-caption-rich-text"] span[dir],'
-    '[data-id] [data-testid="msg-image"] + * span[dir],'
-    "[data-id] span.selectable-text[dir]"
+# "+" / expand button inside the quick-tray that opens the full emoji picker
+WHATSAPP_REACTION_EXPAND = (
+    'button[aria-label="More emojis"],[data-testid="reaction-more"],button[aria-label="+"]'
 )
+
+# Full emoji picker — search box and individual result buttons
+WHATSAPP_EMOJI_PICKER_SEARCH = '[data-testid="emoji-search-input"],input[placeholder*="Search" i]'
+# Parameterised — use .format(emoji="🤖")
+WHATSAPP_EMOJI_PICKER_RESULT = 'button[data-emoji="{emoji}"],button[aria-label="{emoji}"]'
+
+# Reaction display on a message bubble
+WHATSAPP_MSG_REACTIONS = '[data-testid="msg-reactions"]'
