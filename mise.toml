@@ -74,6 +74,19 @@ rsync -av --progress data/whatsapp-profile/ "$SERVER":~/tenbis/data/whatsapp-pro
 echo "Profiles synced to $SERVER"
 """
 
+[tasks."sync:vouchers"]
+description = "rsync pending/ and used/ vouchers from laptop to server"
+run = """
+set -euo pipefail
+if [ -z "${SERVER:-}" ]; then
+  echo "Set SERVER in .env or export SERVER=user@host"
+  exit 1
+fi
+rsync -av --progress data/pending/ "$SERVER":~/tenbis/data/pending/
+rsync -av --progress data/used/    "$SERVER":~/tenbis/data/used/
+echo "Vouchers synced to $SERVER"
+"""
+
 [tasks."server:bootstrap"]
 description = "One-time: clone repo on server and run bootstrap (install mise, uv, Chromium, deps)"
 run = """
