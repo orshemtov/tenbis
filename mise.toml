@@ -141,8 +141,8 @@ description = "Format code with ruff"
 run = "uv run ruff format src tests"
 
 [tasks.lint]
-description = "Lint with ruff"
-run = "uv run ruff check src tests"
+description = "Lint and type-check with ruff + ty"
+run = ["uv run ruff check src tests", "uv run ty check"]
 
 [tasks.test]
 description = "Run tests"

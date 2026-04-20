@@ -3,6 +3,8 @@ import sys
 
 import structlog
 
+logger: structlog.stdlib.BoundLogger = structlog.get_logger()
+
 
 def setup_logger(debug: bool = False, log_format: str = "plain") -> None:
     level = logging.DEBUG if debug else logging.INFO
@@ -24,10 +26,3 @@ def setup_logger(debug: bool = False, log_format: str = "plain") -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
-
-
-def get_logger(**initial_values: object) -> structlog.stdlib.BoundLogger:
-    logger = structlog.get_logger()
-    if initial_values:
-        logger = logger.bind(**initial_values)
-    return logger

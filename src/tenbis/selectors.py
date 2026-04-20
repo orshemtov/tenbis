@@ -25,7 +25,7 @@ TENBIS_BUDGET_LABELS_MONTHLY = ["Monthly balance", "Monthly limit"]
 # Restaurant / dish page
 TENBIS_ADD_TO_CART_BUTTON = 'button[data-test-id="submitDishBtn"], button[data-test-id="add-to-cart"], button:has-text("Add item"), button:has-text("Add to cart"), button:has-text("הוסף לסל")'  # noqa: E501
 TENBIS_CART_BUTTON = '[data-test-id="cart-button"], [aria-label*="cart" i], a[href*="checkout"]'
-TENBIS_CHECKOUT_BUTTON = 'button:has-text("Proceed to payment"), button:has-text("Checkout"), button:has-text("לתשלום"), a:has-text("Checkout")'
+TENBIS_CHECKOUT_BUTTON = 'button:has-text("Proceed to payment"), button:has-text("Checkout"), button:has-text("לתשלום"), a:has-text("Checkout")'  # noqa: E501
 
 # Checkout page
 TENBIS_SUBMIT_ORDER_BUTTON = 'button[data-test-id="submit-order"], button:has-text("Place order"), button:has-text("אישור הזמנה")'  # noqa: E501

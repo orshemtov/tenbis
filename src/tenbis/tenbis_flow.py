@@ -5,13 +5,13 @@ All selectors are imported from selectors.py — this module contains no CSS str
 
 import datetime as dt
 import re
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import Page
 
 from tenbis import selectors
 from tenbis.imaging import create_voucher_image
-from tenbis.logger import get_logger
-from tenbis.settings import Settings
+from tenbis.logger import logger
 from tenbis.vouchers import VoucherRecord
 
 
@@ -44,17 +44,17 @@ def check_auth(page: Page) -> None:
             "10bis session expired. Run 'mise run login:tenbis' on your laptop "
             "then 'mise run sync:profiles'."
         )
-    get_logger().info("tenbis_auth_ok")
+    logger.info("tenbis_auth_ok")
 
 
-def _parse_amount(text: str) -> float | None:
+def parse_amount(text: str) -> float | None:
     match = re.search(r"₪\s*([0-9]+(?:\.[0-9]+)?)|([0-9]+(?:\.[0-9]+)?)\s*₪", text)
     if not match:
         return None
     return float(match.group(1) or match.group(2))
 
 
-def _get_budget_from_text(body_text: str, labels: list[str]) -> float | None:
+def get_budget_from_text(body_text: str, labels: list[str]) -> float | None:
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     normalized = [line.casefold() for line in lines]
     for label in labels:
@@ -62,16 +62,16 @@ def _get_budget_from_text(body_text: str, labels: list[str]) -> float | None:
         for idx, line in enumerate(normalized):
             if label_cf in line:
                 for prev in range(idx - 1, max(idx - 5, -1), -1):
-                    val = _parse_amount(lines[prev])
+                    val = parse_amount(lines[prev])
                     if val is not None:
                         return val
-                val = _parse_amount(lines[idx])
+                val = parse_amount(lines[idx])
                 if val is not None:
                     return val
     return None
 
 
-def _today_spent(body_text: str) -> float:
+def today_spent(body_text: str) -> float:
     """Sum transaction amounts whose date matches today (DD.MM.YY format)."""
     today = dt.date.today().strftime("%d.%m.%y")
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
@@ -81,7 +81,7 @@ def _today_spent(body_text: str) -> float:
             # row layout: date+time, business, order type, ₪amount
             for offset in range(1, 5):
                 if idx + offset < len(lines):
-                    val = _parse_amount(lines[idx + offset])
+                    val = parse_amount(lines[idx + offset])
                     if val is not None:
                         total += val
                         break
@@ -97,16 +97,14 @@ def get_budget(page: Page, daily_limit: float) -> tuple[float, float]:
     page.wait_for_timeout(2_000)
     body = page.locator("body").inner_text()
 
-    monthly = _get_budget_from_text(body, selectors.TENBIS_BUDGET_LABELS_MONTHLY)
+    monthly = get_budget_from_text(body, selectors.TENBIS_BUDGET_LABELS_MONTHLY)
     if monthly is None:
         raise RuntimeError("Could not read monthly balance from billing page")
 
-    spent_today = _today_spent(body)
-    daily_remaining = max(daily_limit - spent_today, 0.0)
+    spent = today_spent(body)
+    daily_remaining = max(daily_limit - spent, 0.0)
 
-    get_logger(monthly=monthly, spent_today=spent_today, daily_remaining=daily_remaining).info(
-        "budget"
-    )
+    logger.info("budget", monthly=monthly, spent_today=spent, daily_remaining=daily_remaining)
     return monthly, daily_remaining
 
 
@@ -120,7 +118,7 @@ def do_login(page: Page, email: str) -> None:
     # Already logged in?
     try:
         page.wait_for_selector(selectors.TENBIS_LOGGED_IN_BUTTON, timeout=5_000)
-        get_logger().info("already_logged_in")
+        logger.info("already_logged_in")
         return
     except Exception:
         pass
@@ -156,26 +154,30 @@ def do_login(page: Page, email: str) -> None:
         page.keyboard.press("Enter")
 
     page.wait_for_selector(selectors.TENBIS_LOGGED_IN_BUTTON, timeout=30_000)
-    get_logger().info("login_complete")
+    logger.info("login_complete")
 
 
-def purchase_voucher(page: Page, settings: Settings) -> tuple[bytes, VoucherRecord]:
+def purchase_voucher(
+    page: Page,
+    item_url: str,
+    amount: float,
+    tz: ZoneInfo,
+    dry_run: bool = False,
+) -> tuple[bytes, VoucherRecord]:
     """Navigate the 10bis site to purchase a Shufersal voucher.
 
     Returns (png_bytes, VoucherRecord). Raises on any failure.
-    If settings.dry_run is True, stops before the final Submit click and raises
+    If dry_run is True, stops before the final Submit click and raises
     RuntimeError so the caller knows nothing was charged.
     """
-    log = get_logger(item_url=settings.item.url, dry_run=settings.dry_run)
-
     # Navigate to the dish page
-    page.goto(settings.item.url, wait_until="domcontentloaded")
+    page.goto(item_url, wait_until="domcontentloaded")
     page.wait_for_timeout(2_000)
 
     # Add to cart
     page.wait_for_selector(selectors.TENBIS_ADD_TO_CART_BUTTON, timeout=15_000)
     page.click(selectors.TENBIS_ADD_TO_CART_BUTTON)
-    log.info("added_to_cart")
+    logger.info("added_to_cart")
     page.wait_for_timeout(1_500)
 
     # Open cart / proceed to checkout
@@ -192,16 +194,16 @@ def purchase_voucher(page: Page, settings: Settings) -> tuple[bytes, VoucherReco
     except Exception:
         pass
 
-    log.info("at_checkout")
+    logger.info("at_checkout")
 
-    if settings.dry_run:
-        log.info("dry_run_stop")
+    if dry_run:
+        logger.info("dry_run_stop")
         raise RuntimeError("DRY_RUN=true — stopped before submitting order (nothing was charged)")
 
     # Submit the order
     page.wait_for_selector(selectors.TENBIS_SUBMIT_ORDER_BUTTON, timeout=15_000)
     page.click(selectors.TENBIS_SUBMIT_ORDER_BUTTON)
-    log.info("order_submitted")
+    logger.info("order_submitted")
 
     # Wait for voucher/barcode page
     page.wait_for_selector(selectors.TENBIS_BARCODE_IMG, timeout=30_000)
@@ -214,23 +216,20 @@ def purchase_voucher(page: Page, settings: Settings) -> tuple[bytes, VoucherReco
     except Exception:
         pass
 
-    # Extract barcode image URL from CSS background-image
-    png_bytes = _capture_barcode(page, barcode_number)
+    png_bytes = capture_barcode(page, barcode_number)
 
-    now_iso = dt.datetime.now(settings.tz).isoformat(timespec="seconds")
+    now_iso = dt.datetime.now(tz).isoformat(timespec="seconds")
     record = VoucherRecord(
         barcode_number=barcode_number,
-        amount=settings.item.amount,
+        amount=amount,
         purchased_at=now_iso,
-        whatsapp_group=settings.whatsapp_group_name,
     )
-    log.info("voucher_purchased", barcode_number=barcode_number)
+    logger.info("voucher_purchased", barcode_number=barcode_number)
     return png_bytes, record
 
 
-def _capture_barcode(page: Page, barcode_number: str) -> bytes:
+def capture_barcode(page: Page, barcode_number: str) -> bytes:
     """Return PNG bytes for the barcode, composed with the number label."""
-    # Try extracting the background-image URL
     barcode_el = page.locator(selectors.TENBIS_BARCODE_IMG).first
     style = barcode_el.get_attribute("style") or ""
     match = re.search(selectors.TENBIS_BARCODE_BG_URL_PATTERN, style)

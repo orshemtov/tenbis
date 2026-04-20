@@ -10,8 +10,7 @@ from pathlib import Path
 from playwright.sync_api import Page
 
 from tenbis import selectors
-from tenbis.logger import get_logger
-from tenbis.settings import Settings
+from tenbis.logger import logger
 
 
 class GroupNotFoundError(Exception):
@@ -31,7 +30,7 @@ BOT_REACTION = "🤖"
 CAPTION_PREFIX = "Shufersal voucher ₪"
 
 # Emojis available in WA's default 6-emoji quick-tray (no picker needed)
-_QUICK_TRAY_EMOJIS = {"👍", "❤️", "😂", "😮", "😢", "🙏"}
+QUICK_TRAY_EMOJIS = {"👍", "❤️", "😂", "😮", "😢", "🙏"}
 
 
 # ── data model ────────────────────────────────────────────────────────────────
@@ -58,7 +57,7 @@ def check_auth(page: Page) -> None:
             "WhatsApp session expired. Run 'mise run login:whatsapp' on your laptop "
             "then 'mise run sync:profiles'."
         )
-    get_logger().info("whatsapp_auth_ok")
+    logger.info("whatsapp_auth_ok")
 
 
 def do_login(page: Page) -> None:
@@ -66,13 +65,13 @@ def do_login(page: Page) -> None:
     page.goto(selectors.WHATSAPP_URL, wait_until="domcontentloaded")
     try:
         page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=10_000)
-        get_logger().info("whatsapp_already_logged_in")
+        logger.info("whatsapp_already_logged_in")
         return
     except Exception:
         pass
     print("Scan the QR code in the browser window to log in to WhatsApp Web.")
     page.wait_for_selector(selectors.WHATSAPP_LOGGED_IN, timeout=120_000)
-    get_logger().info("whatsapp_login_complete")
+    logger.info("whatsapp_login_complete")
 
 
 # ── group navigation ──────────────────────────────────────────────────────────
@@ -124,19 +123,19 @@ def open_group(page: Page, group_name: str) -> None:
             timeout=5_000
         )
         if "," not in subtitle and "participant" not in subtitle.lower():
-            get_logger(subtitle=subtitle).warning("group_subtitle_unexpected")
+            logger.warning("group_subtitle_unexpected", subtitle=subtitle)
     except Exception:
-        get_logger().warning("group_subtitle_not_found")
+        logger.warning("group_subtitle_not_found")
 
-    get_logger(group=group_name).info("group_opened")
+    logger.info("group_opened", group=group_name)
 
 
 # ── send ──────────────────────────────────────────────────────────────────────
 
 
-def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings) -> str:
+def send_barcode(page: Page, image_path: Path, caption: str, group_name: str) -> str:
     """Send an image to the configured WhatsApp group. Returns the message data-id."""
-    open_group(page, settings.whatsapp_group_name)
+    open_group(page, group_name)
 
     page.click(selectors.WHATSAPP_ATTACH_BUTTON, timeout=10_000)
     page.wait_for_timeout(500)
@@ -150,30 +149,30 @@ def send_barcode(page: Page, image_path: Path, caption: str, settings: Settings)
         caption_box.click(timeout=5_000)
         caption_box.type(caption, delay=30)
     except Exception:
-        get_logger().warning("caption_input_not_found_skipping")
+        logger.warning("caption_input_not_found_skipping")
 
     page.locator(selectors.WHATSAPP_SEND_BUTTON).click(timeout=10_000, force=True)
     page.wait_for_timeout(3_000)
 
-    message_id = _last_sent_message_id(page)
-    get_logger(group=settings.whatsapp_group_name, message_id=message_id).info("barcode_sent")
+    message_id = last_sent_message_id(page)
+    logger.info("barcode_sent", group=group_name, message_id=message_id)
     return message_id
 
 
-def send_text(page: Page, text: str, settings: Settings) -> None:
+def send_text(page: Page, text: str, group_name: str) -> None:
     """Send a plain text message to the configured WhatsApp group (for alerts)."""
-    open_group(page, settings.whatsapp_group_name)
+    open_group(page, group_name)
     page.click(selectors.WHATSAPP_TEXT_INPUT, timeout=10_000)
     page.keyboard.type(text, delay=20)
     page.keyboard.press("Enter")
     page.wait_for_timeout(2_000)
-    get_logger(group=settings.whatsapp_group_name).info("text_sent")
+    logger.info("text_sent", group=group_name)
 
 
 # ── scan ──────────────────────────────────────────────────────────────────────
 
 
-def scan_voucher_messages(page: Page, s: Settings) -> list[VoucherMessage]:
+def scan_voucher_messages(page: Page) -> list[VoucherMessage]:
     """Scan the currently open WA group for bot-sent barcode messages.
 
     Scrolls up several times to load older messages (WA uses virtual scrolling),
@@ -195,7 +194,7 @@ def scan_voucher_messages(page: Page, s: Settings) -> list[VoucherMessage]:
         panel.first.evaluate("el => el.scrollTop = el.scrollHeight")
         page.wait_for_timeout(500)
     except Exception:
-        get_logger().warning("scroll_panel_not_found")
+        logger.warning("scroll_panel_not_found")
 
     raw: list[dict] = page.evaluate(
         """([prefix, botReaction]) => {
@@ -255,10 +254,10 @@ def scan_voucher_messages(page: Page, s: Settings) -> list[VoucherMessage]:
     ]
 
 
-def sent_today(page: Page, s: Settings) -> bool:
+def sent_today(page: Page) -> bool:
     """Return True if the bot already sent a voucher message today."""
     today = dt.date.today().isoformat()  # "2026-04-20"
-    return any(today in m.caption for m in scan_voucher_messages(page, s))
+    return any(today in m.caption for m in scan_voucher_messages(page))
 
 
 # ── reactions ─────────────────────────────────────────────────────────────────
@@ -267,7 +266,7 @@ def sent_today(page: Page, s: Settings) -> bool:
 def react_to_message(page: Page, message_id: str, emoji: str) -> None:
     """Add an emoji reaction to a message.
 
-    For emojis in the default quick-tray (_QUICK_TRAY_EMOJIS): hover → tray button.
+    For emojis in the default quick-tray (QUICK_TRAY_EMOJIS): hover → tray button.
     For others (e.g. 🤖): hover → tray → expand → search → click.
     Non-fatal: logs a warning on failure rather than raising.
     """
@@ -283,7 +282,7 @@ def react_to_message(page: Page, message_id: str, emoji: str) -> None:
         react_btn.click(timeout=5_000)
         page.wait_for_timeout(400)
 
-        if emoji in _QUICK_TRAY_EMOJIS:
+        if emoji in QUICK_TRAY_EMOJIS:
             page.locator(f'button[aria-label="{emoji}"]').first.click(timeout=5_000)
         else:
             # Open the full emoji picker via the "+" / "More emojis" button
@@ -296,15 +295,15 @@ def react_to_message(page: Page, message_id: str, emoji: str) -> None:
                 timeout=5_000
             )
 
-        get_logger(message_id=message_id, emoji=emoji).info("reacted_to_message")
+        logger.info("reacted_to_message", message_id=message_id, emoji=emoji)
     except Exception as exc:
-        get_logger(message_id=message_id).warning("react_failed", error=str(exc))
+        logger.warning("react_failed", message_id=message_id, error=str(exc))
 
 
 # ── internals ─────────────────────────────────────────────────────────────────
 
 
-def _last_sent_message_id(page: Page) -> str:
+def last_sent_message_id(page: Page) -> str:
     """Return the data-id of the most recently sent outgoing message, or empty string."""
     try:
         msgs = page.locator("[data-id]")

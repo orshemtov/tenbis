@@ -19,3 +19,4 @@
 - Do not commit `data/` or `.env`; both are in `.gitignore` and contain live session tokens.
 - Do not add AWS, Telegram, or HTTPX dependencies — the whole point of this rewrite is Playwright-only, local operation.
 - Do not auto-retry on auth failure; surface it as a clear error so the user runs `mise run login:tenbis` manually.
+- Do not use underscore-prefixed private functions or variables (e.g. `_helper`, `_MY_CONST`). Python's single-underscore convention adds noise without real encapsulation; just use a plain name.

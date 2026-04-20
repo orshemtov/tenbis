@@ -30,7 +30,7 @@ def create_voucher_image(barcode_bytes: bytes, barcode_number: str) -> bytes:
     if barcode_img.width < MIN_WIDTH:
         scale = MIN_WIDTH / barcode_img.width
         new_size = (int(barcode_img.width * scale), int(barcode_img.height * scale))
-        barcode_img = barcode_img.resize(new_size, Image.LANCZOS)
+        barcode_img = barcode_img.resize(new_size, Image.Resampling.LANCZOS)
 
     padding = 80
     canvas = Image.new(
