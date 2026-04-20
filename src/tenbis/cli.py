@@ -279,6 +279,7 @@ def _run_scan_reactions(s: Settings) -> None:
         for png_path, record in records:
             if whatsapp.has_reaction(page, record.whatsapp_message_id):
                 move_to_used(png_path, s)
+                whatsapp.react_to_message(page, record.whatsapp_message_id, whatsapp.USED_REACTION)
                 get_logger().info("voucher_used", png=str(png_path))
 
 

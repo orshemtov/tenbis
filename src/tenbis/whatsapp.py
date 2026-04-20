@@ -155,6 +155,8 @@ def send_text(page: Page, text: str, settings: Settings) -> None:
 
 # ── scan reactions ────────────────────────────────────────────────────────────
 
+USED_REACTION = "✅"
+
 
 def has_reaction(page: Page, message_id: str) -> bool:
     """Return True if the message with the given data-id has any emoji reaction."""
@@ -168,6 +170,29 @@ def has_reaction(page: Page, message_id: str) -> bool:
         return reaction_el.count() > 0
     except Exception:
         return False
+
+
+def react_to_message(page: Page, message_id: str, emoji: str) -> None:
+    """Add an emoji reaction to a message using the internal WA Web API.
+
+    Non-fatal: logs a warning on failure rather than raising.
+    """
+    result = page.evaluate(
+        """
+        async ([messageId, reaction]) => {
+            const collections = window.require('WAWebCollections');
+            const msg = collections.Msg.get(messageId)
+                ?? (await collections.Msg.getMessagesById([messageId]))?.messages?.[0];
+            if (!msg) return 'msg_not_found';
+            await window.require('WAWebSendReactionMsgAction')
+                        .sendReactionToMsg(msg, reaction);
+            return 'ok';
+        }
+        """,
+        [message_id, emoji],
+    )
+    if result != "ok":
+        get_logger(message_id=message_id).warning("react_failed", result=result)
 
 
 def _last_sent_message_id(page: Page) -> str:
