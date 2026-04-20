@@ -6,6 +6,7 @@ All selectors are imported from selectors.py — no CSS strings here.
 import dataclasses
 import datetime as dt
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import Page
 
@@ -254,9 +255,9 @@ def scan_voucher_messages(page: Page) -> list[VoucherMessage]:
     ]
 
 
-def sent_today(page: Page) -> bool:
-    """Return True if the bot already sent a voucher message today."""
-    today = dt.date.today().isoformat()  # "2026-04-20"
+def sent_today(page: Page, tz: ZoneInfo) -> bool:
+    """Return True if the bot already sent a voucher message today (in tz)."""
+    today = dt.datetime.now(tz).date().isoformat()  # "2026-04-20" in Israel time
     return any(today in m.caption for m in scan_voucher_messages(page))
 
 

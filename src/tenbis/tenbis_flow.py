@@ -71,9 +71,9 @@ def get_budget_from_text(body_text: str, labels: list[str]) -> float | None:
     return None
 
 
-def today_spent(body_text: str) -> float:
-    """Sum transaction amounts whose date matches today (DD.MM.YY format)."""
-    today = dt.date.today().strftime("%d.%m.%y")
+def today_spent(body_text: str, tz: ZoneInfo) -> float:
+    """Sum transaction amounts whose date matches today in tz (DD.MM.YY format)."""
+    today = dt.datetime.now(tz).date().strftime("%d.%m.%y")
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     total = 0.0
     for idx, line in enumerate(lines):
@@ -88,7 +88,7 @@ def today_spent(body_text: str) -> float:
     return total
 
 
-def get_budget(page: Page, daily_limit: float) -> tuple[float, float]:
+def get_budget(page: Page, daily_limit: float, tz: ZoneInfo) -> tuple[float, float]:
     """Return (monthly_balance, daily_remaining).
 
     daily_remaining = daily_limit - sum of today's transactions.
@@ -101,7 +101,7 @@ def get_budget(page: Page, daily_limit: float) -> tuple[float, float]:
     if monthly is None:
         raise RuntimeError("Could not read monthly balance from billing page")
 
-    spent = today_spent(body)
+    spent = today_spent(body, tz)
     daily_remaining = max(daily_limit - spent, 0.0)
 
     logger.info("budget", monthly=monthly, spent_today=spent, daily_remaining=daily_remaining)

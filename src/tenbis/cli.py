@@ -68,7 +68,7 @@ def budget() -> None:
     s = load_settings()
     with tenbis_context(s.tenbis_profile_dir, s.headless, s.debug_dir) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit)
+        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit, s.tz)
     typer.echo(f"Monthly balance: ₪{monthly:.0f}  |  Daily remaining: ₪{daily_remaining:.0f}")
 
 
@@ -179,7 +179,7 @@ def run() -> None:
         except Exception:
             logger.exception("ack_failed")  # non-fatal
 
-        if whatsapp.sent_today(wa_page):
+        if whatsapp.sent_today(wa_page, s.tz):
             logger.info("already_sent_today")
             typer.echo("Already sent a voucher today. Nothing to do.")
             raise typer.Exit(0)
@@ -247,7 +247,7 @@ def do_purchase(s: Settings) -> tuple[bytes | None, VoucherRecord | None]:
     """Run the 10bis purchase flow. Returns (png_bytes, record) or (None, None) if skipped."""
     with tenbis_context(s.tenbis_profile_dir, s.headless, s.debug_dir) as (_, page):
         tenbis_flow.check_auth(page)
-        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit)
+        monthly, daily_remaining = tenbis_flow.get_budget(page, s.tenbis_daily_limit, s.tz)
 
         if monthly < s.tenbis_min_monthly_balance or daily_remaining < s.item.amount:
             logger.warning(
