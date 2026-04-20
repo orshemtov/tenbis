@@ -25,6 +25,10 @@ run = "uv run tenbis login-tenbis"
 description = "Log in to WhatsApp Web with a headed browser / QR scan (run locally)"
 run = "uv run tenbis login-whatsapp"
 
+[tasks."login:tenbis:server"]
+description = "Log in to 10bis on a headless server using xvfb-run (enter OTP when prompted)"
+run = "xvfb-run --auto-servernum uv run tenbis login-tenbis"
+
 # ── daily ops ─────────────────────────────────────────────────────────────────
 
 [tasks.budget]
