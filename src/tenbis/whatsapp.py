@@ -156,7 +156,7 @@ def send_text(page: Page, text: str, settings: Settings) -> None:
 
 # ── scan reactions ────────────────────────────────────────────────────────────
 
-USED_REACTION = "✅"
+USED_REACTION = "👍"
 
 
 def has_reaction(page: Page, message_id: str) -> bool:
@@ -174,26 +174,30 @@ def has_reaction(page: Page, message_id: str) -> bool:
 
 
 def react_to_message(page: Page, message_id: str, emoji: str) -> None:
-    """Add an emoji reaction to a message using the internal WA Web API.
+    """Add an emoji reaction to a message via hover → quick tray.
 
     Non-fatal: logs a warning on failure rather than raising.
     """
-    result = page.evaluate(
-        """
-        async ([messageId, reaction]) => {
-            const collections = window.require('WAWebCollections');
-            const msg = collections.Msg.get(messageId)
-                ?? (await collections.Msg.getMessagesById([messageId]))?.messages?.[0];
-            if (!msg) return 'msg_not_found';
-            await window.require('WAWebSendReactionMsgAction')
-                        .sendReactionToMsg(msg, reaction);
-            return 'ok';
-        }
-        """,
-        [message_id, emoji],
-    )
-    if result != "ok":
-        get_logger(message_id=message_id).warning("react_failed", result=result)
+    selector = selectors.WHATSAPP_MESSAGE_BY_ID.format(message_id=message_id)
+    try:
+        msg_el = page.locator(selector).first
+        msg_el.scroll_into_view_if_needed(timeout=5_000)
+        page.wait_for_timeout(400)
+        msg_el.hover()
+        page.wait_for_timeout(700)  # toolbar appears after ~400 ms
+
+        # Reaction button is in a global overlay — query from page root, not msg_el
+        react_btn = page.locator(selectors.WHATSAPP_REACTION_HOVER_BUTTON).first
+        react_btn.click(timeout=5_000)
+        page.wait_for_timeout(400)
+
+        # Pick the target emoji from the quick tray
+        tray_btn = page.locator(selectors.WHATSAPP_REACTION_QUICK_THUMBSUP).first
+        tray_btn.click(timeout=5_000)
+
+        get_logger(message_id=message_id, emoji=emoji).info("reacted_to_message")
+    except Exception as exc:
+        get_logger(message_id=message_id).warning("react_failed", error=str(exc))
 
 
 # Caption format written by send_barcode: "Shufersal voucher ₪{amount} | {barcode}"
@@ -219,19 +223,29 @@ def scrape_sent_vouchers(page: Page, group_name: str, scroll_passes: int = 10) -
     raw = page.evaluate(
         """
         () => {
-            try {
-                const store = window.require('WAWebCollections');
-                const msgs = store.Msg.getModelsArray();
-                return msgs
-                    .filter(m => m.id && m.id.fromMe && (m.type === 'image' || m.caption))
-                    .map(m => ({
-                        id: m.id._serialized || m.id.id || '',
-                        caption: m.caption || m.body || '',
-                        timestamp: m.t || 0,
-                    }));
-            } catch (e) {
-                return [];
+            const results = [];
+            const msgs = document.querySelectorAll('[data-id]');
+            for (const msg of msgs) {
+                const dataId = msg.getAttribute('data-id');
+                if (!dataId || dataId.startsWith('album-')) continue;
+                // Only outgoing messages (data-id contains 'true' for self-sent)
+                if (!dataId.includes('true')) continue;
+                // Must contain an image
+                const hasImage = msg.querySelector(
+                    'img[src], [data-testid="msg-image"], [data-testid="media-url-provider"]'
+                );
+                if (!hasImage) continue;
+                // Find a caption span
+                const spans = msg.querySelectorAll('span[dir], span.selectable-text');
+                for (const span of spans) {
+                    const text = (span.textContent || '').trim();
+                    if (text.toLowerCase().includes('shufersal voucher')) {
+                        results.push({ id: dataId, caption: text, timestamp: 0 });
+                        break;
+                    }
+                }
             }
+            return results;
         }
         """
     )

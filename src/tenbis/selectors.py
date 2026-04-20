@@ -77,6 +77,17 @@ WHATSAPP_REACTION_CONTAINER = '[data-testid="msg-reactions"], [class*="reaction"
 # Outgoing text message input
 WHATSAPP_TEXT_INPUT = '[aria-label="Type a message"], [aria-label*="Type a message"]'
 
+# Reaction hover button — lives in a global overlay after hovering a message.
+# Always query from page root, NOT from the message element.
+WHATSAPP_REACTION_HOVER_BUTTON = (
+    '[data-testid="emoji-reaction"],'
+    '[data-testid="reaction-emoji-button"],'
+    '[aria-label="React"],'
+    '[aria-label*="React"]'
+)
+# 👍 button in the quick reaction tray (always present in the default 6)
+WHATSAPP_REACTION_QUICK_THUMBSUP = 'button[aria-label="👍"],button[aria-label*="thumbs up" i]'
+
 # History import — outgoing image messages with a caption
 # Outgoing messages have a row with data-id; the caption lives in a neighbouring span
 WHATSAPP_OUTGOING_IMAGE_CAPTION = (
