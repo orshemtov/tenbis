@@ -4,8 +4,6 @@ Use `mise run <task>` for the canonical interface; the commands below are what e
 """
 
 import sys
-import tempfile
-from pathlib import Path
 
 import typer
 from playwright.sync_api import Page
@@ -14,7 +12,13 @@ from tenbis import tenbis_flow, whatsapp
 from tenbis.browser import tenbis_context, whatsapp_context
 from tenbis.logger import logger, setup_logger
 from tenbis.settings import Settings
-from tenbis.vouchers import VoucherRecord
+from tenbis.vouchers import (
+    PendingVoucher,
+    VoucherRecord,
+    delete_pending_voucher,
+    list_pending_vouchers,
+    save_pending_voucher,
+)
 
 app = typer.Typer(help="10bis → Shufersal voucher automation", add_completion=False)
 
@@ -114,22 +118,37 @@ def purchase() -> None:
     """
     s = load_settings()
 
+    preflight_whatsapp(s)
+
     png_bytes, record = do_purchase(s)
     if png_bytes is None or record is None:
         raise typer.Exit(0)
 
-    _, tmp_path = tempfile.mkstemp(suffix=".png")
-    tmp = Path(tmp_path)
-    tmp.write_bytes(png_bytes)
-    try:
-        caption = make_caption(record)
-        with whatsapp_context(s.whatsapp_profile_dir, s.headless, s.debug_dir) as (_, page):
-            whatsapp.check_auth(page)
-            whatsapp.send_barcode(page, tmp, caption, s.whatsapp_group_name)
-        logger.info("voucher_sent", caption=caption)
-        typer.echo(f"Sent: {caption}")
-    finally:
-        tmp.unlink(missing_ok=True)
+    pending = save_pending_voucher(s.data_dir, record, png_bytes)
+    logger.info("pending_voucher_saved", path=str(pending.image_path))
+    send_pending_voucher(s, pending)
+    typer.echo(f"Sent: {make_caption(record)}")
+
+
+@app.command("send-pending-vouchers")
+def send_pending_vouchers() -> None:
+    """Send locally saved pending vouchers, deleting each only after success."""
+    s = load_settings()
+    pending = list_pending_vouchers(s.data_dir)
+    if not pending:
+        typer.echo("No pending vouchers to send.")
+        return
+
+    preflight_whatsapp(s)
+    sent = 0
+    skipped = 0
+    for voucher in pending:
+        result = send_pending_voucher(s, voucher)
+        if result == "sent":
+            sent += 1
+        else:
+            skipped += 1
+    typer.echo(f"Pending vouchers handled. Sent: {sent}  Already in WhatsApp: {skipped}")
 
 
 # ── scan reactions command ────────────────────────────────────────────────────
@@ -208,21 +227,16 @@ def run() -> None:
         raise typer.Exit(0)  # budget too low — already logged
 
     # ── Step 4: WhatsApp — send barcode ───────────────────────────────────────
-    _, tmp_path = tempfile.mkstemp(suffix=".png")
-    tmp = Path(tmp_path)
-    tmp.write_bytes(png_bytes)
+    pending = save_pending_voucher(s.data_dir, record, png_bytes)
+    logger.info("pending_voucher_saved", path=str(pending.image_path))
     try:
-        caption = make_caption(record)
-        with whatsapp_context(s.whatsapp_profile_dir, s.headless, s.debug_dir) as (_, wa_page):
-            whatsapp.send_barcode(wa_page, tmp, caption, s.whatsapp_group_name)
-        logger.info("daily_run_complete", caption=caption)
+        send_pending_voucher(s, pending)
+        logger.info("daily_run_complete", caption=make_caption(record))
         typer.echo("Daily run complete.")
     except Exception as exc:
-        logger.exception("send_failed")
-        typer.echo(f"WA send failed: {exc}", err=True)
+        logger.exception("send_failed", pending=str(pending.image_path))
+        typer.echo(f"WA send failed; voucher left at {pending.image_path}: {exc}", err=True)
         sys.exit(1)
-    finally:
-        tmp.unlink(missing_ok=True)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -241,6 +255,29 @@ def ack_used_vouchers(wa_page: Page) -> int:
             logger.info("voucher_acked", caption=msg.caption)
             count += 1
     return count
+
+
+def preflight_whatsapp(s: Settings) -> None:
+    """Verify WhatsApp is ready before any operation that may buy a voucher."""
+    with whatsapp_context(s.whatsapp_profile_dir, s.headless, s.debug_dir) as (_, page):
+        whatsapp.check_auth(page)
+        whatsapp.open_group(page, s.whatsapp_group_name)
+
+
+def send_pending_voucher(s: Settings, pending: PendingVoucher) -> str:
+    """Send one pending voucher, deleting it only after send or duplicate detection."""
+    caption = make_caption(pending.record)
+    with whatsapp_context(s.whatsapp_profile_dir, s.headless, s.debug_dir) as (_, page):
+        whatsapp.check_auth(page)
+        whatsapp.open_group(page, s.whatsapp_group_name)
+        if whatsapp.voucher_already_sent(page, caption, pending.record.barcode_number):
+            delete_pending_voucher(pending)
+            logger.info("pending_voucher_duplicate_deleted", caption=caption)
+            return "duplicate"
+        whatsapp.send_barcode(page, pending.image_path, caption, s.whatsapp_group_name)
+    delete_pending_voucher(pending)
+    logger.info("pending_voucher_sent_deleted", caption=caption)
+    return "sent"
 
 
 def do_purchase(s: Settings) -> tuple[bytes | None, VoucherRecord | None]:

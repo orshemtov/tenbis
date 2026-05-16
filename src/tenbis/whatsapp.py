@@ -261,6 +261,14 @@ def sent_today(page: Page, tz: ZoneInfo) -> bool:
     return any(today in m.caption for m in scan_voucher_messages(page))
 
 
+def voucher_already_sent(page: Page, caption: str, barcode_number: str) -> bool:
+    """Return True if this voucher caption/barcode is already visible in the group."""
+    return any(
+        msg.caption == caption or (barcode_number and barcode_number in msg.caption)
+        for msg in scan_voucher_messages(page)
+    )
+
+
 # ── reactions ─────────────────────────────────────────────────────────────────
 
 

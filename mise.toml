@@ -71,6 +71,10 @@ echo "Profiles synced to $SERVER"
 description = "Show active and acknowledged vouchers by scanning the WhatsApp group"
 run = "uv run tenbis list-vouchers"
 
+[tasks."vouchers:send-pending"]
+description = "Send locally saved pending vouchers to WhatsApp"
+run = "uv run tenbis send-pending-vouchers"
+
 [tasks."server:bootstrap"]
 description = "One-time: clone repo on server and run bootstrap (install mise, uv, Chromium, deps)"
 run = """
