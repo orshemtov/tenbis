@@ -44,14 +44,22 @@ WHATSAPP_URL = "https://web.whatsapp.com"
 WHATSAPP_LOGGED_IN = "#pane-side"
 
 # Search
-WHATSAPP_SEARCH_BOX = '[aria-label="Search or start a new chat"]'
-WHATSAPP_SEARCH_INPUT = '[aria-label="Search or start a new chat"]'
+WHATSAPP_SEARCH_BOX = (
+    '[aria-label="Search or start a new chat"], '
+    '[aria-label="Search input textbox"], '
+    '[contenteditable="true"][role="textbox"][aria-label*="Search" i]'
+)
+WHATSAPP_SEARCH_INPUT = WHATSAPP_SEARCH_BOX
 
 # Chat list result item — the span that holds the chat title text
 WHATSAPP_CHAT_RESULT_TITLE = 'span[dir="auto"][title]'
 
 # Active chat header — used to validate we opened the right group
-WHATSAPP_ACTIVE_CHAT_TITLE = 'header [data-testid="conversation-info-header-chat-title"] span'
+WHATSAPP_ACTIVE_CHAT_TITLE = (
+    'header [data-testid="conversation-info-header-chat-title"] span, '
+    "header span[title], "
+    'header span[dir="auto"]'
+)
 # Subtitle shown for groups (e.g. "You, Wife")
 WHATSAPP_ACTIVE_CHAT_SUBTITLE = (
     'header [data-testid="conversation-info-header"] [data-testid="subtitle"]'
@@ -68,7 +76,13 @@ WHATSAPP_PHOTOS_BUTTON = '[aria-label="Photos & videos"]'
 WHATSAPP_CAPTION_INPUT = (
     '[data-testid="media-caption-input-container"], [aria-label*="Add a caption"]'
 )
-WHATSAPP_SEND_BUTTON = '[data-testid="send"], [data-testid="media-send"], [aria-label="Send"]'
+WHATSAPP_MEDIA_PREVIEW_CLOSE = '[data-testid="drawer-fullscreen"] [data-testid="close-button"]'
+WHATSAPP_SEND_BUTTON = (
+    '[data-testid="send"], '
+    '[data-testid="media-send"], '
+    '[aria-label="Send"], '
+    '[role="button"][aria-label^="Send "][aria-label$=" selected"]'
+)
 
 # Message in conversation — used to locate sent messages for reaction scanning
 # The data-id attribute uniquely identifies each message

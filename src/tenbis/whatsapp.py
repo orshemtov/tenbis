@@ -80,7 +80,12 @@ def do_login(page: Page) -> None:
 
 def open_group(page: Page, group_name: str) -> None:
     """Search for group_name and open it, validating it is a group chat."""
-    page.click(selectors.WHATSAPP_SEARCH_BOX, timeout=10_000)
+    if active_chat_title(page) == group_name:
+        logger.info("group_already_open", group=group_name)
+        return
+
+    search_box = page.locator(selectors.WHATSAPP_SEARCH_BOX).first
+    search_box.click(timeout=10_000)
     page.wait_for_timeout(500)
     page.keyboard.press("Control+a")
     page.keyboard.press("Backspace")
@@ -131,12 +136,23 @@ def open_group(page: Page, group_name: str) -> None:
     logger.info("group_opened", group=group_name)
 
 
+def active_chat_title(page: Page) -> str | None:
+    try:
+        title = page.locator(selectors.WHATSAPP_ACTIVE_CHAT_TITLE).first
+        value = title.get_attribute("title", timeout=1_000) or title.inner_text(timeout=1_000)
+    except Exception:
+        return None
+    return value.strip() or None
+
+
 # ── send ──────────────────────────────────────────────────────────────────────
 
 
 def send_barcode(page: Page, image_path: Path, caption: str, group_name: str) -> str:
     """Send an image to the configured WhatsApp group. Returns the message data-id."""
     open_group(page, group_name)
+
+    close_media_preview(page)
 
     page.click(selectors.WHATSAPP_ATTACH_BUTTON, timeout=10_000)
     page.wait_for_timeout(500)
@@ -158,6 +174,16 @@ def send_barcode(page: Page, image_path: Path, caption: str, group_name: str) ->
     message_id = last_sent_message_id(page)
     logger.info("barcode_sent", group=group_name, message_id=message_id)
     return message_id
+
+
+def close_media_preview(page: Page) -> None:
+    preview_close = page.locator(selectors.WHATSAPP_MEDIA_PREVIEW_CLOSE).first
+    try:
+        preview_close.click(timeout=1_000)
+        page.wait_for_timeout(500)
+        logger.info("stale_media_preview_closed")
+    except Exception:
+        pass
 
 
 def send_text(page: Page, text: str, group_name: str) -> None:
