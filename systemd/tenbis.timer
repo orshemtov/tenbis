@@ -4,8 +4,8 @@ Description=10bis daily Shufersal voucher timer
 [Timer]
 # Fire at 09:00 Jerusalem time every day
 OnCalendar=*-*-* 09:00:00 Asia/Jerusalem
-# Do not catch up missed runs. Manual recovery is safer than an unexpected purchase.
-Persistent=false
+# Catch up missed runs if server was off at 09:00. Safe: run checks sent_today and won't double-buy.
+Persistent=true
 # Add a small random delay to avoid thundering-herd on shared networks
 RandomizedDelaySec=60
 
