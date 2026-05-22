@@ -56,6 +56,7 @@ run = "uv run tenbis run"
 
 [tasks."sync:profiles"]
 description = "rsync 10bis + WhatsApp Chromium profiles from laptop to server"
+env = { SERVER = "home" }
 run = """
 set -euo pipefail
 if [ -z "${SERVER:-}" ]; then
