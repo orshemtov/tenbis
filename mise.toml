@@ -12,7 +12,7 @@ run = [
 ]
 
 [tasks."install:deps"]
-description = "Install Chromium system deps (run once on the server, needs sudo)"
+description = "Install Chromium system deps (needs sudo)"
 run = "uv run playwright install-deps chromium"
 
 # ── auth ──────────────────────────────────────────────────────────────────────
@@ -52,22 +52,6 @@ run = "uv run tenbis scan-reactions"
 description = "Full daily pipeline: scan reactions → purchase → send (idempotent)"
 run = "uv run tenbis run"
 
-# ── deploy / server ───────────────────────────────────────────────────────────
-
-[tasks."sync:profiles"]
-description = "rsync 10bis + WhatsApp Chromium profiles from laptop to server"
-env = { SERVER = "home" }
-run = """
-set -euo pipefail
-if [ -z "${SERVER:-}" ]; then
-  echo "Set SERVER in .env or export SERVER=user@host"
-  exit 1
-fi
-rsync -av --progress data/10bis-profile/ "$SERVER":~/tenbis/data/10bis-profile/
-rsync -av --progress data/whatsapp-profile/ "$SERVER":~/tenbis/data/whatsapp-profile/
-echo "Profiles synced to $SERVER"
-"""
-
 [tasks."vouchers:list"]
 description = "Show active and acknowledged vouchers by scanning the WhatsApp group"
 run = "uv run tenbis list-vouchers"
@@ -75,69 +59,6 @@ run = "uv run tenbis list-vouchers"
 [tasks."vouchers:send-pending"]
 description = "Send locally saved pending vouchers to WhatsApp"
 run = "uv run tenbis send-pending-vouchers"
-
-[tasks."server:bootstrap"]
-description = "One-time: clone repo on server and run bootstrap (install mise, uv, Chromium, deps)"
-run = """
-set -euo pipefail
-if [ -z "${SERVER:-}" ]; then
-  echo "Set SERVER in .env or export SERVER=user@host"
-  exit 1
-fi
-ssh -t "$SERVER" '
-  set -euo pipefail
-  if [ -d ~/tenbis/.git ]; then
-    echo "~/tenbis already exists — skipping clone"
-  else
-    git clone https://github.com/orshemtov/tenbis.git ~/tenbis
-  fi
-  cd ~/tenbis && bash scripts/bootstrap-server.sh
-'
-"""
-
-[tasks.deploy]
-description = "Push local commits then pull + reinstall on the server"
-run = """
-set -euo pipefail
-if [ -z "${SERVER:-}" ]; then
-  echo "Set SERVER in .env or export SERVER=user@host"
-  exit 1
-fi
-git push
-ssh "$SERVER" 'cd ~/tenbis && git pull && mise run install'
-echo "Deployed to $SERVER"
-"""
-
-[tasks."server:install"]
-description = "Install systemd user units and enable the timer (run on server)"
-run = """
-set -euo pipefail
-dest="$HOME/.config/systemd/user"
-mkdir -p "$dest"
-# Substitute $HOME into the unit templates
-sed "s|{HOME}|$HOME|g" systemd/tenbis.service > "$dest/tenbis.service"
-sed "s|{HOME}|$HOME|g" systemd/tenbis.timer   > "$dest/tenbis.timer"
-systemctl --user daemon-reload
-systemctl --user enable --now tenbis.timer
-loginctl enable-linger "$USER" 2>/dev/null || true
-echo "Timer active:"
-systemctl --user list-timers tenbis.timer --no-pager
-"""
-
-[tasks."server:status"]
-description = "Show systemd timer and service status"
-run = """
-systemctl --user status tenbis.timer tenbis.service --no-pager || true
-systemctl --user list-timers tenbis.timer --no-pager
-"""
-
-[tasks."server:logs"]
-description = "Tail the last 200 log lines from the tenbis service"
-run = "journalctl --user -u tenbis.service -n 200 --no-pager"
-
-[tasks."server:run-now"]
-description = "Trigger an immediate run (same as the daily timer)"
-run = "systemctl --user start tenbis.service"
 
 # ── dev ───────────────────────────────────────────────────────────────────────
 

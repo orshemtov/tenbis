@@ -46,7 +46,7 @@ def login_tenbis() -> None:
     setup_logger(debug=True, log_format=s.log_format)
     with tenbis_context(s.tenbis_profile_dir, headless=False, debug_dir=s.debug_dir) as (_, page):
         tenbis_flow.do_login(page, s.tenbis_email)
-    typer.echo("10bis session saved. Run 'mise run sync:profiles' to copy to the server.")
+    typer.echo("10bis session saved.")
 
 
 @app.command("login-whatsapp")
@@ -60,7 +60,7 @@ def login_whatsapp() -> None:
         page,
     ):
         whatsapp.do_login(page)
-    typer.echo("WhatsApp session saved. Run 'mise run sync:profiles' to copy to the server.")
+    typer.echo("WhatsApp session saved.")
 
 
 # ── inspection commands ───────────────────────────────────────────────────────
@@ -211,8 +211,7 @@ def run() -> None:
     except tenbis_flow.AuthExpiredError as exc:
         logger.error("tenbis_auth_expired")
         error_text = (
-            f"10bis session expired — run `mise run login:tenbis` on your laptop "
-            f"then `mise run sync:profiles`\n\nDetails: {exc}"
+            f"10bis session expired — run `mise run login:tenbis` on your laptop\n\nDetails: {exc}"
         )
     except Exception as exc:
         logger.exception("purchase_failed")

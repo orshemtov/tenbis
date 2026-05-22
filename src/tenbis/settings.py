@@ -44,9 +44,6 @@ class Settings(BaseSettings):
     log_format: str = "plain"  # "plain" | "json"
     timezone: str = "Asia/Jerusalem"
 
-    # Deploy
-    server: str = ""
-
     @property
     def tz(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
